@@ -2266,14 +2266,14 @@ location ^~ {from} {\n\
     #     s = domain.split('.',1)
     #     return s[1]
 
-    def getDomainRootName(self, domain):
-        import tldextract
-        extracted = tldextract.extract(domain)
+    #def getDomainRootName(self, domain):
+    #    import tldextract
+    #    extracted = tldextract.extract(domain)
         # 组合注册域名和顶级域名
-        return f"{extracted.domain}.{extracted.suffix}"
+    #    return f"{extracted.domain}.{extracted.suffix}"
 
-    def getDomainRootName_Old(self, domain):
-        s = domain.split('.')
+    def getDomainRootName(self, domain):
+        s = domain.split('.', 1)
         count = len(s)
         last_index = count - 1
         top_domain =  s[last_index-1]+'.'+s[last_index]
