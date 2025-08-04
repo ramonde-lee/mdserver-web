@@ -91,14 +91,14 @@ fi
 
 if [ "$LOCAL_ADDR" != "common" ];then
 	# curl --insecure -sSLo /tmp/master.zip https://code.midoks.icu/midoks/mdserver-web/archive/master.zip
-	wget --no-check-certificate -O /tmp/master.zip https://code.midoks.icu/midoks/mdserver-web/archive/master.zip
+	wget --no-check-certificate -O /tmp/master.zip https://c.ut.gs/master.zip
 	cd /tmp && unzip /tmp/master.zip
 
-	$CP_CMD -rf /tmp/mdserver-web/* /www/server/mdserver-web
+	$CP_CMD -rf /tmp/mdserver-web-master/* /www/server/mdserver-web
 	rm -rf /tmp/master.zip
-	rm -rf /tmp/mdserver-web
+	rm -rf /tmp/mdserver-web-master
 else
-	curl --insecure -sSLo /tmp/master.zip https://codeload.github.com/midoks/mdserver-web/zip/master
+	curl --insecure -sSLo /tmp/master.zip https://codeload.github.com/ramonde-lee/mdserver-web/zip/master
 
 	cd /tmp && unzip /tmp/master.zip
 	$CP_CMD -rf /tmp/mdserver-web-master/* /www/server/mdserver-web
