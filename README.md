@@ -1,11 +1,12 @@
 <p align="center">
   <img alt="logo" src="https://cdn.jsdelivr.net/gh/midoks/mdserver-web@latest/route/static/logo.png" height="140" />
-  <h3 align="center">mdserver-web</h3>
+  <h3 align="center">mdserver-web&Ramonde Lee自用版</h3>
   <p align="center">一款简单Linux面板服务</p>
   <p align="center">强烈推荐系统:debian</p>
 </p>
 
 ### 简介
+mdserver-web&Ramonde Lee自用版是基于对面板的强化和适应性需求的修改版本，修改的内容见修改日志（保留原作者的最后更新日志），需要的人可以免费使用，其它内容及说明遵循原作者，在此也再次感谢原作者的付出。
 
 简单的Linux面板,感谢BT.CN写出如此好的web管理软件。我一看到，就知道这是我一直想要的页面化管理方式。
 复制了后台管理界面，按照自己想要的方式写了一版。
@@ -108,29 +109,35 @@ docker run -itd --name mw-server --privileged=true -p 7200:7200 -p 80:80 -p 443:
 ```
 
 
+### Ramonde Lee自用版本更新 0.18.3
+
+1、修复申请泛域名证书BUG；
+2、修复计划任务状态调整无效BUG；
+3、常规优化。
+
 ### 版本更新 0.18.2
 
 - 备份目录功能支持排除目录。
 - 其他细节优化。
 
-### JSDelivr安装地址
+### 安装地址
 
 - 初始安装
 
 ```
-curl --insecure -fsSL https://cdn.jsdelivr.net/gh/midoks/mdserver-web@latest/scripts/install.sh | bash
+curl --insecure -fsSL https://c.ut.gs/install.sh | bash
 ```
 
 - 直接更新
 
 ```
-curl --insecure -fsSL https://cdn.jsdelivr.net/gh/midoks/mdserver-web@latest/scripts/update.sh | bash
+curl --insecure -fsSL https://c.ut.gs/update.sh | bash
 ```
 
 - 卸载脚本
 
 ```
-wget --no-check-certificate -O uninstall.sh https://cdn.jsdelivr.net/gh/midoks/mdserver-web@latest/scripts/uninstall.sh && bash uninstall.sh
+wget --no-check-certificate -O uninstall.sh https://c.ut.gs/uninstall.sh && bash uninstall.sh
 ```
 
 ### 备用地址
@@ -138,20 +145,19 @@ wget --no-check-certificate -O uninstall.sh https://cdn.jsdelivr.net/gh/midoks/m
 - 初始安装
 
 ```
-curl --insecure -fsSL https://raw.githubusercontent.com/midoks/mdserver-web/master/scripts/install.sh | bash
-curl --insecure -fsSL https://code.midoks.icu/midoks/mdserver-web/raw/branch/master/scripts/install.sh | bash
+curl --insecure -fsSL https://raw.githubusercontent.com/ramonde-lee/mdserver-web/master/scripts/install.sh | bash
 ```
 
 - 直接更新
 
 ```
-curl --insecure -fsSL https://raw.githubusercontent.com/midoks/mdserver-web/master/scripts/update.sh | bash
+curl --insecure -fsSL https://raw.githubusercontent.com/ramonde-lee/mdserver-web/master/scripts/update.sh | bash
 ```
 
 - 卸载脚本
 
 ```
-wget --no-check-certificate -O uninstall.sh https://raw.githubusercontent.com/midoks/mdserver-web/master/scripts/uninstall.sh && bash uninstall.sh
+wget --no-check-certificate -O uninstall.sh https://raw.githubusercontent.com/ramonde-lee/mdserver-web/master/scripts/uninstall.sh && bash uninstall.sh
 ```
 
 
@@ -160,7 +166,7 @@ wget --no-check-certificate -O uninstall.sh https://raw.githubusercontent.com/mi
 - 需已经安装mdserver-web
 
 ```
-curl --insecure -fsSL  https://raw.githubusercontent.com/midoks/mdserver-web/dev/scripts/quick/app.sh | bash
+curl --insecure -fsSL  https://raw.githubusercontent.com/ramonde-lee/mdserver-web/dev/scripts/quick/app.sh | bash
 ```
 
 
