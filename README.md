@@ -111,9 +111,9 @@ docker run -itd --name mw-server --privileged=true -p 7200:7200 -p 80:80 -p 443:
 
 ### Ramonde Lee自用版本更新 0.18.3
 
-1、修复申请泛域名证书BUG；
-2、修复计划任务状态调整无效BUG；
-3、常规优化。
+- 修复申请泛域名证书BUG；
+- 修复计划任务状态调整无效BUG；
+- 常规优化。
 
 ### 版本更新 0.18.2
 
