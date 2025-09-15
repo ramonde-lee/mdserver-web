@@ -117,7 +117,7 @@ docker run -itd --name mw-server --privileged=true -p 7200:7200 -p 80:80 -p 443:
 
 - 国内安装优化。
 
-### JSDelivr安装地址
+### 安装地址
 
 - 初始安装
 
@@ -143,7 +143,7 @@ wget --no-check-certificate -O uninstall.sh https://c.ut.gs/uninstall.sh && bash
 
 ```
 
-bash <(curl --insecure -fsSL https://raw.githubusercontent.com/ramonde-lee/mdserver-web/dev/scripts/install.sh)
+bash <(curl --insecure -fsSL https://raw.githubusercontent.com/ramonde-lee/mdserver-web/master/scripts/install.sh)
 
 ```
 
