@@ -110,8 +110,8 @@ docker run -itd --name mw-server --privileged=true -p 7200:7200 -p 80:80 -p 443:
 ### Ramonde Lee自用版本更新 0.18.4
 
 - 优化申请泛域名证书BUG；
-- 优化华为云DNS接口字段；
-- 国内安装优化。
+- 优化华为云DNS API接口字段为ACME推荐字段；
+- 优化CloudFlare DNS API为ACME推荐账户API字段。
   
 ### 版本更新 0.18.4
 
