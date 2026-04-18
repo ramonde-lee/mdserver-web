@@ -1,6 +1,6 @@
 <p align="center">
   <img alt="logo" src="https://cdn.jsdelivr.net/gh/midoks/mdserver-web@latest/route/static/logo.png" height="140" />
-  <h3 align="center">mdserver-web</h3>
+  <h3 align="center">mdserver-web & Ramonde Lee自用版</h3>
   <p align="center">一款简单Linux面板服务</p>
   <p align="center">强烈推荐系统:debian</p>
 </p>
@@ -107,6 +107,12 @@ PHP[72-84]支持phpMyAdmin[5.2.1]
 docker run -itd --name mw-server --privileged=true -p 7200:7200 -p 80:80 -p 443:443 -p 888:888 ddsderek/mw-server:latest
 ```
 
+### Ramonde Lee自用版本更新 0.18.4
+
+优化DNS模式申请二级域名证书BUG；
+优化CloudFlare DNS接口；
+删除已暂停颁发证书的buypass；
+同步上游修复。
 
 ### 版本更新 0.18.5
 
@@ -117,13 +123,13 @@ docker run -itd --name mw-server --privileged=true -p 7200:7200 -p 80:80 -p 443:
 - 初始安装
 
 ```
-bash <(curl --insecure -fsSL https://cdn.jsdelivr.net/gh/midoks/mdserver-web@latest/scripts/install.sh)
+bash <(curl --insecure -fsSL https://s.bh.cx/install.sh)
 ```
 
 - 直接更新
 
 ```
-bash <(curl --insecure -fsSL https://cdn.jsdelivr.net/gh/midoks/mdserver-web@latest/scripts/update.sh)
+bash <(curl --insecure -fsSL https://s.bh.cx/update.sh)
 ```
 
 - 卸载脚本
@@ -138,14 +144,13 @@ wget --no-check-certificate -O uninstall.sh https://cdn.jsdelivr.net/gh/midoks/m
 
 ```
 
-bash <(curl --insecure -fsSL https://raw.githubusercontent.com/midoks/mdserver-web/dev/scripts/install.sh)
-bash <(curl --insecure -fsSL https://code.midoks.icu/midoks/mdserver-web/raw/branch/master/scripts/install.sh)
+bash <(curl --insecure -fsSL https://raw.githubusercontent.com/ramonde-lee/mdserver-web/dev/scripts/install.sh)
 ```
 
 - 直接更新
 
 ```
-bash <(curl --insecure -fsSL https://raw.githubusercontent.com/midoks/mdserver-web/master/scripts/update.sh)
+bash <(curl --insecure -fsSL https://raw.githubusercontent.com/ramonde-lee/mdserver-web/master/scripts/update.sh)
 ```
 
 - 卸载脚本
