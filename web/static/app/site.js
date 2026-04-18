@@ -2319,8 +2319,6 @@ function opSSLAcme(type, id, siteName, callback){
   					<label class="mr20" for="ca_letsencrypt" style="font-weight:normal">letsencrypt</label></label>\
   					<input type="radio" name="apply_ca" value="zerossl" id="ca_zerossl/>\
   					<label class="mr20" for="ca_zerossl" style="font-weight:normal">zerossl</label></label>\
-  					<input type="radio" name="apply_ca" value="buypass" id="ca_buypass/>\
-  					<label class="mr20" for="ca_buypass" style="font-weight:normal">buypass</label></label>\
   				</div>\
 	  		</div>\
 	  		<div class="line mtb10" id="dnsapi_option" style="display:none;">\
@@ -2352,7 +2350,7 @@ function opSSLAcme(type, id, siteName, callback){
   		<div class="line mtb10" id="dns_alias" style="display:none;">\
 			<span class="tname text-center">别名验证</span>\
 			<input class="bt-input-text" style="width:240px;" type="text" name="dns_alias" />\
-			<span> (建议别用) <a class="btlink" target="_blank" href="https://github.com/acmesh-official/acme.sh/wiki/DNS-alias-mode#7-challenge-alias-or-domain-alias">文档说明</a><span>\
+			<span>请阅读 <a class="btlink" target="_blank" href="https://github.com/acmesh-official/acme.sh/wiki/DNS-alias-mode#7-challenge-alias-or-domain-alias">文档说明</a><span>\
 		</div>\
   		<div class="line mtb10">\
   			<span class="tname text-center">域名</span>\
