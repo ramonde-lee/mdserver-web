@@ -377,10 +377,10 @@ mw_install(){
     fi
 
     mw_common_proxy
-    echo "bash <(curl -fsSL "${HTTP_PREFIX}raw.githubusercontent.com/midoks/mdserver-web/master/scripts/install.sh")"
-    bash <(curl -fsSL "${HTTP_PREFIX}raw.githubusercontent.com/midoks/mdserver-web/master/scripts/update.sh")
+    echo "bash <(curl -fsSL "${HTTP_PREFIX}raw.githubusercontent.com/ramonde-lee/mdserver-web/master/scripts/install.sh")"
+    bash <(curl -fsSL "${HTTP_PREFIX}raw.githubusercontent.com/ramonde-lee/mdserver-web/master/scripts/update.sh")
     mw_clean_lib
-    bash <(curl -fsSL "${HTTP_PREFIX}raw.githubusercontent.com/midoks/mdserver-web/master/scripts/install.sh")
+    bash <(curl -fsSL "${HTTP_PREFIX}raw.githubusercontent.com/ramonde-lee/mdserver-web/master/scripts/install.sh")
 }
 
 mw_update()
@@ -391,8 +391,8 @@ mw_update()
     fi
 
     mw_common_proxy
-    echo "bash <(curl -fsSL "${HTTP_PREFIX}raw.githubusercontent.com/midoks/mdserver-web/master/scripts/update.sh")"
-    bash <(curl -fsSL "${HTTP_PREFIX}raw.githubusercontent.com/midoks/mdserver-web/master/scripts/update.sh")
+    echo "bash <(curl -fsSL "${HTTP_PREFIX}raw.githubusercontent.com/ramonde-lee/mdserver-web/master/scripts/update.sh")"
+    bash <(curl -fsSL "${HTTP_PREFIX}raw.githubusercontent.com/ramonde-lee/mdserver-web/master/scripts/update.sh")
 }
 
 mw_update_dev()
