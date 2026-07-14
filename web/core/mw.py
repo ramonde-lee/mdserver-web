@@ -25,6 +25,7 @@ import subprocess
 import glob
 import base64
 import re
+import shutil
 
 from random import Random
 
@@ -201,6 +202,10 @@ def getCommonFile():
     }
     return data
 
+def getSysTTL():
+    f = "/proc/sys/net/ipv4/ip_default_ttl"
+    return readFile(f).strip()
+
 def checkCert(certPath='ssl/certificate.pem'):
     # 验证证书
     openssl = '/usr/bin/openssl'
@@ -313,6 +318,35 @@ def toSize(size, middle='') -> str:
         size = float(size) / 1024.0
         s = u
     return str(round(size, 2)) + middle + u
+
+def fastCopy(src, dst, buffer_size=256 * 1024):  # 128MB 缓冲区
+    with open(src, 'rb') as fsrc:
+        with open(dst, 'wb') as fdst:
+            shutil.copyfileobj(fsrc, fdst, length=buffer_size)
+
+
+# linux高效复制
+def sendfile(src, dst):
+    if isAppleSystem():
+        try:
+            shutil.copyfile(src, dst)
+            return True
+        except Exception as e:
+            return False
+    
+    try:
+        with open(src, 'rb') as fsrc, open(dst, 'wb') as fdst:
+            filesize = os.fstat(fsrc.fileno()).st_size
+            sent = os.sendfile(fdst.fileno(), fsrc.fileno(), 0, filesize)
+            if sent != filesize:
+                shutil.copyfile(src, dst)
+        return True
+    except (OSError, AttributeError) as e:
+        try:
+            shutil.copyfile(src, dst)
+            return True
+        except Exception as e2:
+            return False
 
 def returnData(status, msg, data=None):
     if data is None:
