@@ -2,6 +2,8 @@
 PATH=/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin:~/bin:/opt/homebrew/bin
 export PATH=$PATH:/opt/homebrew/bin
 
+action=${1}
+
 curPath=`pwd`
 rootPath=$(dirname "$curPath")
 rootPath=$(dirname "$rootPath")
@@ -116,7 +118,10 @@ else
 	OPTIONS="$OPTIONS --with-openssl"
 fi
 
-if [ ! -d $serverPath/php/${PHP_VER} ];then
+if [ ! -d $serverPath/php/${PHP_VER} ] || [ "$action" == "upgrade" ];then
+	# https://github.com/php/php-src/compare/php-8.1.33...PHP-8.1-CVE-2026-109618-109619.patch
+	cd $sourcePath/php/php${PHP_VER} && patch -p1 < ${rootPath}/plugins/php/versions/81/cve/8.1-CVE-2026-109618-109619.patch
+
 	cd $sourcePath/php/php${PHP_VER}
 	./configure \
 	--prefix=$serverPath/php/${PHP_VER} \
@@ -153,9 +158,11 @@ Uninstall_php()
 	echo "卸载php-${version}..."
 }
 
-action=${1}
-if [ "${1}" = 'install' ];then
+
+if [ "${1}" = 'install' ] || [ "$action" = "upgrade" ];then
 	Install_php
-else
+elif [ "${1}" = 'uninstall' ];then
 	Uninstall_php
+else
+	echo "OPTIONS ERROR"
 fi

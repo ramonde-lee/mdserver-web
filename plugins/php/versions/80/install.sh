@@ -123,7 +123,10 @@ else
 	OPTIONS="$OPTIONS --with-openssl"
 fi
 
-if [ ! -d $serverPath/php/${PHP_VER} ];then
+if [ ! -d $serverPath/php/${PHP_VER} ] || [ "$action" == "upgrade" ];then
+	# https://github.com/php/php-src/compare/php-8.0.30...PHP-8.0-CVE-2026-109618-109619.patch
+	cd $sourcePath/php/php${PHP_VER} && patch -p1 < ${rootPath}/plugins/php/versions/80/cve/8.0-CVE-2026-109618-109619.patch
+
 	cd $sourcePath/php/php${PHP_VER}
 	./buildconf --force
 	./configure \
@@ -162,8 +165,10 @@ Uninstall_php()
 }
 
 action=${1}
-if [ "${1}" = 'install' ];then
+if [ "${1}" = 'install' ] || [ "$action" = "upgrade" ];then
 	Install_php
-else
+elif [ "${1}" = 'uninstall' ];then
 	Uninstall_php
+else
+	echo "OPTIONS ERROR"
 fi

@@ -2,6 +2,8 @@
 PATH=/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin:~/bin:/opt/homebrew/bin
 export PATH=$PATH:/opt/homebrew/bin
 
+action=${1}
+
 curPath=`pwd`
 rootPath=$(dirname "$curPath")
 rootPath=$(dirname "$rootPath")
@@ -9,9 +11,9 @@ serverPath=$(dirname "$rootPath")
 sourcePath=${serverPath}/source
 sysName=`uname`
 
-version=7.4.26
+version=7.4.33
 PHP_VER=74
-md5_file_ok=0cbaae3de6c02cf8d7b82843fdfdf53d
+md5_file_ok=924846abf93bc613815c55dd3f5809377813ac62a9ec4eb3778675b82a27b927
 Install_php()
 {
 #------------------------ install start ------------------------------------#
@@ -54,7 +56,7 @@ if [ ! -d $sourcePath/php/php${PHP_VER} ];then
 
 	#检测文件是否损坏.
 	if [ -f $sourcePath/php/php-${version}.tar.xz ];then
-		md5_file=`md5sum $sourcePath/php/php-${version}.tar.xz  | awk '{print $1}'`
+		md5_file=`sha256sum $sourcePath/php/php-${version}.tar.xz  | awk '{print $1}'`
 		if [ "${md5_file}" != "${md5_file_ok}" ]; then
 			echo "PHP${version} 下载文件不完整,重新安装"
 			rm -rf $sourcePath/php/php-${version}.tar.xz
@@ -123,7 +125,14 @@ else
 	OPTIONS="$OPTIONS --with-openssl"
 fi
 
-if [ ! -d $serverPath/php/${PHP_VER} ];then
+if [ ! -d $serverPath/php/${PHP_VER} ] || [ "$action" == "upgrade" ];then
+
+	# curl -L -o 7.4-CVE-2026-109618-109619.patch  "https://github.com/php/php-src/compare/php-7.4.33...PHP-7.4-CVE-2026-109618-109619.patch"
+
+	# cd /www/server/source/php/php74 && patch -p1 --dry-run < /www/server/mdserver-web/plugins/php/versions/74/cve/7.4-CVE-2026-109618-109619.patch
+
+	# cd $sourcePath/php/php${PHP_VER} && patch -p1 --dry-run < ${rootPath}/plugins/php/versions/74/cve/7.4-CVE-2026-109618-109619.patch
+	cd $sourcePath/php/php${PHP_VER} && patch -p1 < ${rootPath}/plugins/php/versions/74/cve/7.4-CVE-2026-109618-109619.patch
 	cd $sourcePath/php/php${PHP_VER} && make clean
 	./configure \
 	--prefix=$serverPath/php/${PHP_VER} \
@@ -162,9 +171,10 @@ Uninstall_php()
 	echo "卸载php-${version}..."
 }
 
-action=${1}
-if [ "${1}" = 'install' ];then
+if [ "${1}" = 'install' ] || [ "$action" = "upgrade" ];then
 	Install_php
-else
+elif [ "${1}" = 'uninstall' ];then
 	Uninstall_php
+else
+	echo "OPTIONS ERROR"
 fi

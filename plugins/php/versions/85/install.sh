@@ -2,6 +2,8 @@
 PATH=/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin:~/bin:/opt/homebrew/bin
 export PATH=$PATH:/opt/homebrew/bin
 
+action=${1}
+
 curPath=`pwd`
 rootPath=$(dirname "$curPath")
 rootPath=$(dirname "$rootPath")
@@ -9,9 +11,9 @@ serverPath=$(dirname "$rootPath")
 sourcePath=${serverPath}/source
 sysName=`uname`
 
-version=8.5.9
+version=8.5.12
 PHP_VER=85
-md5_file_ok=0db7855f25bcd0ab1d592cdb35e284d6f6a5d2ae0f6f621122e364cc39b708f4
+md5_file_ok=08bc2eba2a588654ade1357174aa646b761556c862dda0678345ee29ed481209
 Install_php()
 {
 #------------------------ install start ------------------------------------#
@@ -128,7 +130,7 @@ fi
 
 echo "$sourcePath/php/php${PHP_VER}"
 
-if [ ! -d $serverPath/php/${PHP_VER} ];then
+if [ ! -d $serverPath/php/${PHP_VER} ] || [ "$action" == "upgrade" ];then
 	cd $sourcePath/php/php${PHP_VER}
 	# ./buildconf --force
 	./configure \
@@ -167,9 +169,11 @@ Uninstall_php()
 	echo "卸载php-${version}..."
 }
 
-action=${1}
-if [ "${1}" = 'install' ];then
+
+if [ "${1}" = 'install' ] || [ "$action" = "upgrade" ];then
 	Install_php
-else
+elif [ "${1}" = 'uninstall' ];then
 	Uninstall_php
+else
+	echo "OPTIONS ERROR"
 fi
