@@ -8,9 +8,10 @@ rootPath=$(dirname "$rootPath")
 serverPath=$(dirname "$rootPath")
 sysName=`uname`
 
-# cd /www/server/mdserver-web/plugins/php && bash install.sh install 73
 # cd /www/server/mdserver-web/plugins/php && bash install.sh install 85
 # cd /www/server/mdserver-web/plugins/php && bash install.sh upgrade 85
+# cd /www/server/mdserver-web && . ./bin/activate && python3 plugins/php/index.py upgrade_check 56
+
 # https://www.php.net/releases
 
 if id www &> /dev/null ;then 
@@ -53,7 +54,7 @@ fi
 
 if [ "${action}" = "upgrade" ];then
 	cd ${curPath} && sh -x $curPath/versions/$2/install.sh upgrade
-	systemctl restart php${type}
+	which systemctl && systemctl restart php${type}
 	exit 0
 fi
 

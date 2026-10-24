@@ -2,13 +2,17 @@
 PATH=/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin:~/bin:/opt/homebrew/bin
 export PATH=$PATH:/opt/homebrew/bin
 
+# cd /www/server/mdserver-web && . ./bin/activate && python3 plugins/memcached/index.py upgrade_check 1.6
+
+action=$1
+
 curPath=`pwd`
 rootPath=$(dirname "$curPath")
 rootPath=$(dirname "$rootPath")
 serverPath=$(dirname "$rootPath")
 
 sys_os=`uname`
-VERSION=1.6.42
+VERSION=1.6.45
 
 echo $sys_os
 
@@ -25,8 +29,13 @@ Install_mem(){
 
 	OPTIONS=''
 	if [ ${sys_os} = "Darwin" ]; then
-		LIB_DEPEND_DIR=`brew info libevent | grep /opt/homebrew/Cellar/libevent | cut -d \  -f 1 | awk 'END {print}'`
+		LIB_DEPEND_DIR=`brew --prefix libevent`
 		OPTIONS="${OPTIONS} --with-libevent=${LIB_DEPEND_DIR}"
+		OPTIONS="${OPTIONS} --disable-docs"
+
+		#mac 新版问题，后续可能会解决
+		echo "cat ${rootPath}/plugins/memcached/hook/darwin_priv.c > $serverPath/source/memcached/memcached-${VERSION}/darwin_priv.c"
+		cat ${rootPath}/plugins/memcached/hook/darwin_priv.c > $serverPath/source/memcached/memcached-${VERSION}/darwin_priv.c
 	fi
 
 	echo "./configure --prefix=${serverPath}/memcached && make && make install"
@@ -36,7 +45,7 @@ Install_mem(){
 
 	make && make install
 
-	if [ -d $serverPath/memcached ];then
+	if [ -d $serverPath/memcached ] || [ "$action" == "upgrade" ];then
 		echo '1.6' > $serverPath/memcached/version.pl
 		echo '安装memcached成功'
 
@@ -66,10 +75,10 @@ Uninstall_mem()
 
 
 # /www/server/memcached/bin/memcached -d -p 11211 -u root  -m 100 -c 100
-
-action=$1
-if [ "${1}" = 'install' ];then
+if [ "${1}" = 'install' ] || [ "$action" = "upgrade" ];then
 	Install_mem
-else
+elif [ "${1}" = 'uninstall' ];then
 	Uninstall_mem
+else
+	echo "OPTIONS ERROR"
 fi

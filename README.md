@@ -113,11 +113,11 @@ docker run -itd --name mw-server --privileged=true -p 7200:7200 -p 80:80 -p 443:
 - 删除已暂停颁发证书的buypass；
 - 同步上游修复。
 
-### 版本更新 0.18.6
+### 版本更新 0.19.0
 
 - 常规优化。
 
-### JSDelivr安装地址
+### 增加在线更新支持。
 
 - 初始安装
 
