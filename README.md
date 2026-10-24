@@ -114,6 +114,8 @@ docker run -itd --name mw-server --privileged=true -p 7200:7200 -p 80:80 -p 443:
 - 同步上游修复及优化；
 - 增加在线更新支持。
 
+### 安装、更新、卸载
+
 - 初始安装
 
 ```
