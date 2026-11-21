@@ -8,10 +8,9 @@ import os
 import re
 import time
 
-if sys.platform != 'darwin':
-    os.chdir('/www/server/mdserver-web')
-
-web_dir = os.getcwd() + "/web"
+# 按脚本位置定位项目根目录:scripts -> 项目根，避免依赖调用方 cwd
+root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+web_dir = os.path.join(root_dir, 'web')
 if os.path.exists(web_dir):
     sys.path.append(web_dir)
     os.chdir(web_dir)
@@ -100,8 +99,13 @@ class backupTools:
      # 数据库密码处理
     def mypass(self, act, root):
         conf_file = self.getConf('mysql')
-        mw.execShell("sed -i '/user=root/d' {}".format(conf_file))
-        mw.execShell("sed -i '/password=/d' {}".format(conf_file))
+        mw.execShell("sed -i '_bak' '/user=root/d' {}".format(conf_file))
+        mw.execShell("sed -i '_bak' '/password=/d' {}".format(conf_file))
+
+        conf_file_bak = conf_file+'_bak'
+        if os.path.exists(conf_file_bak):
+            os.unlink(conf_file_bak)
+
         if act:
             mycnf = mw.readFile(conf_file)
             src_dump = "[mysqldump]\n"
@@ -114,7 +118,39 @@ class backupTools:
             return True
         return True
 
-    def backupDatabase(self, name, count):
+    def calcName(self, name):
+        total = sum(ord(c) for c in name)
+        return total
+
+    def getDbBackupList(self,dbname=''):
+        bkDir = mw.getFatherDir() + '/backup/database/mysql'
+        if not os.path.isdir(bkDir):
+            return []
+        blist = os.listdir(bkDir)
+        r = []
+
+        bname = 'db_' + dbname + '_' + time.strftime('%Y', time.localtime())
+        blen = len(bname)
+        for x in blist:
+            fbstr = x[0:blen]
+            if fbstr == bname:
+                r.append(x)
+        # 文件名按时间戳命名,排序后即为时间顺序(旧->新)
+        r.sort()
+        return r
+
+    def backupDatabase(self, params, count):
+        params_args = params.split("@")
+        name = params_args[0]
+        table_name = ''
+        if len(params_args) > 1 and params_args[1] != 'undefined':
+            table_name = params_args[1]
+
+        backup_name = name
+        if table_name != '':
+            backup_name = name+'@'+table_name
+
+        # print("name:"+name,"table_name:"+table_name)
         db_path = mw.getServerDir() + '/mysql'
         db_name = 'mysql'
         name = mw.M('databases').dbPos(db_path, 'mysql').where(
@@ -124,15 +160,14 @@ class backupTools:
             endDate = time.strftime('%Y/%m/%d %X', time.localtime())
             log = "数据库[" + name + "]不存在!"
             print("★[" + endDate + "] " + log)
-            print(
-                "----------------------------------------------------------------------------")
+            print("----------------------------------------------------------------------------")
             return
 
-        backup_path = mw.getBackupDir() + '/database'
+        backup_path = mw.getBackupDir() + '/database/mysql'
         if not os.path.exists(backup_path):
             mw.execShell("mkdir -p " + backup_path)
 
-        filename = backup_path + "/db_" + name + "_" + \
+        filename = backup_path + "/db_" + backup_name + "_" + \
             time.strftime('%Y%m%d_%H%M%S', time.localtime()) + ".sql.gz"
 
         mysql_root = mw.M('config').dbPos(db_path, db_name).where(
@@ -140,6 +175,9 @@ class backupTools:
 
         my_cnf = self.getConf('mysql')
         self.mypass(True, mysql_root)
+        # print("mysql_root:",mysql_root)
+        # cnf_content = mw.readFile(my_cnf)
+        # print(cnf_content)
 
         # mw.execShell(db_path + "/bin/mysqldump --opt --default-character-set=utf8 " +
         #              name + " | gzip > " + filename)
@@ -150,54 +188,83 @@ class backupTools:
         # 开启一致性事务 会lock表
         # cmd = db_path + "/bin/mysqldump --defaults-file=" + my_cnf + "  --force --opt --default-character-set=utf8 " + \
         #     name + " | gzip > " + filename
-        option = ''
-        mode = self.recognizeDbMode('mysql')
-        if mode == 'gtid':
-            option = ' --set-gtid-purged=off '
+
+        option = ' --set-gtid-purged=off '
+        # option = ''
+        # mode = self.recognizeDbMode('mysql')
+        # if mode == 'gtid':
+        #     option = ' --set-gtid-purged=off '
 
         # skip-opt 不会lock表
         # --skip-opt --create-options
         cmd = db_path + "/bin/mysqldump --defaults-file=" + my_cnf +" " + option +" --single-transaction -q --default-character-set=utf8mb4 " + \
             name + " | gzip > " + filename
+
+        if table_name != '':
+            cmd = db_path + "/bin/mysqldump --defaults-file=" + my_cnf +" " + option +" --single-transaction -q --default-character-set=utf8mb4 " + \
+            name +" "+ table_name +" | gzip > " + filename
+
         # print(cmd)
-        mw.execShell(cmd)
+        os.system(cmd)
+        # mw.execShell(cmd)
+
+        self.mypass(False, mysql_root)
 
         if not os.path.exists(filename):
             endDate = time.strftime('%Y/%m/%d %X', time.localtime())
             log = "数据库[" + name + "]备份失败!"
             print("★[" + endDate + "] " + log)
-            print(
-                "----------------------------------------------------------------------------")
+            print("----------------------------------------------------------------------------")
             return
-
-        self.mypass(False, mysql_root)
 
         endDate = time.strftime('%Y/%m/%d %X', time.localtime())
         outTime = time.time() - startTime
-        pid = mw.M('databases').dbPos(db_path, db_name).where(
-            'name=?', (name,)).getField('id')
 
-        mw.M('backup').add('type,name,pid,filename,add_time,size', (1, os.path.basename(
-            filename), pid, filename, endDate, os.path.getsize(filename)))
-        log = "数据库[" + name + "]备份成功,用时[" + str(round(outTime, 2)) + "]秒"
+        log = "数据库[" + backup_name + "]备份成功,用时[" + str(round(outTime, 2)) + "]秒"
         mw.writeLog('计划任务', log)
         print("★[" + endDate + "] " + log)
         print("|---保留最新的[" + count + "]份备份")
         print("|---文件名:" + filename)
 
+        backups = self.getDbBackupList(backup_name)
         # 清理多余备份
-        backups = mw.M('backup').where(
-            'type=? and pid=?', ('1', pid)).field('id,filename').select()
-
         num = len(backups) - int(count)
         if num > 0:
             for backup in backups:
-                mw.execShell("rm -f " + backup['filename'])
-                mw.M('backup').where('id=?', (backup['id'],)).delete()
+                mw.execShell("rm -f " + backup_path + "/"+backup)
                 num -= 1
-                print("|---已清理过期备份文件：" + backup['filename'])
+                print("|---已清理过期文件：" + backup)
                 if num < 1:
                     break
+
+
+    # def _old_backupDatabase():
+    #     pid = mw.M('databases').dbPos(db_path, db_name).where(
+    #         'name=?', (name,)).getField('id')
+
+    #     backup_pid = pid
+    #     if table_name != '':
+    #         backup_pid = str(pid) + "@" + table_name
+
+    #     mw.M('backup').add('type,name,pid,filename,add_time,size', (1, os.path.basename(
+    #         filename), backup_pid, filename, endDate, os.path.getsize(filename)))
+    #     log = "数据库[" + backup_name + "]备份成功,用时[" + str(round(outTime, 2)) + "]秒"
+    #     mw.writeLog('计划任务', log)
+    #     print("★[" + endDate + "] " + log)
+    #     print("|---保留最新的[" + count + "]份备份")
+    #     print("|---文件名:" + filename)
+
+    #     # 清理多余备份
+    #     backups = mw.M('backup').where('type=? and pid=?', ('1', backup_pid)).field('id,filename').select()
+    #     num = len(backups) - int(count)
+    #     if num > 0:
+    #         for backup in backups:
+    #             mw.execShell("rm -f " + backup['filename'])
+    #             mw.M('backup').where('id=?', (backup['id'],)).delete()
+    #             num -= 1
+    #             print("|---已清理过期备份文件：" + backup['filename'])
+    #             if num < 1:
+    #                 break
 
     def backupSiteAll(self, save):
         sites = mw.M('sites').field('name').select()
@@ -292,7 +359,7 @@ if __name__ == "__main__":
         else:
             backup.backupSite(sys.argv[2], sys.argv[3], sys.argv[4])
     elif stype == 'database':
-        if sys.argv[2] == 'ALL':
+        if sys.argv[2].startswith('ALL@'):
             backup.backupDatabaseAll(sys.argv[3])
         else:
             backup.backupDatabase(sys.argv[2], sys.argv[3])

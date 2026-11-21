@@ -945,7 +945,7 @@ function syncToDatabase(type){
 }
 
 function setDbAccess(username,name){
-    mgPost('get_db_access','','username='+username, function(data){
+    mgPost('get_db_access','',{username:username,name:name}, function(data){
         var rdata = $.parseJSON(data.data);
         if (!rdata.status){
             layer.msg(rdata.msg,{icon:2,shade: [0.3, '#000']});
@@ -1033,12 +1033,13 @@ function setBackup(db_name){
     var layerIndex = layer.open({
         type: 1,
         title: "数据库[MongoDB]备份详情",
-        area: ['600px', '280px'],
+        area: ['700px', '280px'],
         closeBtn: 1,
         shadeClose: false,
         content: '<div class="pd15">\
                     <div class="db_list">\
                         <button id="btn_backup" class="btn btn-success btn-sm" type="button">备份</button>\
+                        <button id="btn_backup_reload" class="btn btn-success btn-sm" type="button">刷新</button>\
                         <button id="btn_local_import" class="btn btn-success btn-sm" type="button">外部导入</button>\
                     </div >\
                     <div class="divtable">\
@@ -1070,6 +1071,10 @@ function setBackup(db_name){
                 setLocalImport(db_name);
             });
 
+            $('#btn_backup_reload').click(function(){
+                setBackupReq(db_name);
+            });
+
             setBackupReq(db_name);
         },
     });
@@ -1086,6 +1091,7 @@ function setBackupReq(db_name, obj){
                     <td><span> ' + rdata.data[i]['time'] + '</span></td>\
                     <td style="text-align: right;">\
                         <a class="btlink" onclick="importBackup(\'' + rdata.data[i]['name'] + '\',\'' +db_name+ '\')">导入</a> | \
+                        <a class="btlink" onclick="importBackupProgress(\'' + rdata.data[i]['name'] + '\',\'' +db_name+ '\')">导入进度</a> | \
                         <a class="btlink" onclick="downloadBackup(\'' + rdata.data[i]['file'] + '\')">下载</a> | \
                         <a class="btlink" onclick="delBackup(\'' + rdata.data[i]['name'] + '\',\'' +db_name+ '\')">删除</a>\
                     </td>\
@@ -1100,7 +1106,7 @@ function delBackup(filename, name, path){
         path = "";
     }
     mgPost('delete_db_backup','',{filename:filename,path:path},function(){
-        layer.msg('执行成功!');
+        layer.msg(rdata.msg, { icon: rdata.status ? 1 : 2 });
         setTimeout(function(){
             setBackupReq(name);
         },2000);
@@ -1117,8 +1123,32 @@ function importBackup(file,name){
     });
 }
 
-function setLocalImport(db_name){
+function importBackupProgress(file,name){
+    mgPost('import_db_backup_progress', '',{file:file,name:name}, function(data){
+        var rdata = $.parseJSON(data.data);
+        layer.open({
+            title: "手动导入命令CMD【显示进度】",
+            area: ['600px', '180px'],
+            type:1,
+            closeBtn: 1,
+            shadeClose: false,
+            btn:["复制","取消"],
+            content: '<div class="pd15">\
+                        <div class="divtable">\
+                            <pre class="layui-code">'+rdata.data+'</pre>\
+                        </div>\
+                    </div>',
+            success:function(){
+                copyText(rdata.data);
+            },
+            yes:function(){
+                copyText(rdata.data);
+            }
+        });
+    });
+}
 
+function setLocalImport(db_name){
     //上传文件
     function uploadDbFiles(upload_dir){
         var up_db = layer.open({
@@ -1172,6 +1202,7 @@ function setLocalImport(db_name){
                         <td><span> ' + file_list[i]['time'] + '</span></td>\
                         <td style="text-align: right;">\
                             <a class="btlink" onclick="importDbExternal(\'' + file_list[i]['name'] + '\',\'' +db_name+ '\')">导入</a> | \
+                            <a class="btlink" onclick="importDbExternalProgress(\'' + file_list[i]['name'] + '\',\'' +db_name+ '\')">导入进度</a> | \
                             <a class="btlink del" index="'+i+'">删除</a>\
                         </td>\
                     </tr>';
@@ -1195,7 +1226,7 @@ function setLocalImport(db_name){
     var layerIndex = layer.open({
         type: 1,
         title: "从文件导入数据",
-        area: ['600px', '380px'],
+        area: ['700px', '380px'],
         closeBtn: 1,
         shadeClose: false,
         content: '<div class="pd15">\
@@ -1229,7 +1260,6 @@ function setLocalImport(db_name){
                 var upload_dir = $('input[name="upload_dir"]').val();
                 uploadDbFiles(upload_dir);
             });
-
             getList();
         },
     });  
@@ -1241,10 +1271,40 @@ function importDbExternal(file,name){
     });
 }
 
+function importDbExternalProgress(file,name){
+    mgPost('import_db_external_progress', '',{file:file,name:name}, function(data){
+        var rdata = $.parseJSON(data.data);
+        layer.open({
+            title: "手动导入命令CMD【显示进度】",
+            area: ['600px', '180px'],
+            type:1,
+            closeBtn: 1,
+            shadeClose: false,
+            btn:["复制","取消"],
+            content: '<div class="pd15">\
+                        <div class="divtable">\
+                            <pre class="layui-code">'+rdata.data+'</pre>\
+                        </div>\
+                    </div>',
+            success:function(){
+                copyText(rdata.data);
+            },
+            yes:function(){
+                copyText(rdata.data);
+            }
+        });
+    });
+}
+
+
 function otherFunc(){
-    var con = '<p class="conf_p" style="text-align:center;">\
-            <button class="btn btn-default btn-sm" onclick="cronAddCheck()">添加检查任务</button>  \
-            <button class="btn btn-default btn-sm" onclick="cronDelCheck()">删除检查任务</button>\
+    var con = '<p class="conf_p">\
+            <button class="btn btn-default btn-sm" onclick="cronAddCheck()">添加检查任务</button>\
+            <button class="btn btn-default btn-sm" onclick="cronDelCheck()">删除检查任务</button><hr/>\
+            <button class="btn btn-default btn-sm" onclick="cleanLog()">清空日志</button><hr/>\
+            <button class="btn btn-default btn-sm" onclick="openSlowlogCmd()">开启慢日志</button>\
+            <button class="btn btn-default btn-sm" onclick="closeSlowlogCmd()">关闭慢日志</button>\
+            <button class="btn btn-default btn-sm" onclick="findSlowlogCmd()">查看慢日志</button>\
         </p>';
     $(".soft-man-con").html(con);
 }
@@ -1260,6 +1320,52 @@ function cronDelCheck(){
     mgPost('cron_del_check', '', {}, function(data){
         var rdata = $.parseJSON(data.data);
         layer.msg(rdata.msg, { icon: rdata.status ? 1 : 2 });
+    });
+}
+
+function cleanLog(){
+	mgPost('clean_log', '', {}, function(data){
+        var rdata = $.parseJSON(data.data);
+        layer.msg(rdata.msg, { icon: rdata.status ? 1 : 2 });
+    });
+}
+
+function openSlowlogCmd(){
+    mgPost('open_slowlog', '', {}, function(data){
+        var rdata = $.parseJSON(data.data);
+        layer.msg(rdata.msg, { icon: rdata.status ? 1 : 2 });
+    });
+}
+
+function closeSlowlogCmd(){
+    mgPost('close_slowlog', '', {}, function(data){
+        var rdata = $.parseJSON(data.data);
+        layer.msg(rdata.msg, { icon: rdata.status ? 1 : 2 });
+    });
+}
+
+function findSlowlogCmd(file,name){
+    mgPost('find_slowlog_cmd','', {}, function(data){
+        var rdata = $.parseJSON(data.data);
+        layer.open({
+            title: "手动CMD",
+            area: ['600px', '180px'],
+            type:1,
+            closeBtn: 1,
+            shadeClose: false,
+            btn:["复制","取消"],
+            content: '<div class="pd15">\
+                        <div class="divtable">\
+                            <pre class="layui-code">'+rdata.data+'</pre>\
+                        </div>\
+                    </div>',
+            success:function(){
+                copyText(rdata.data);
+            },
+            yes:function(){
+                copyText(rdata.data);
+            }
+        });
     });
 }
 

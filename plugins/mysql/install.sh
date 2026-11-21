@@ -13,6 +13,7 @@ export PATH
 # cd /www/server/mdserver-web && . bin/activate && python3 plugins/mysql/index.py install_pre_inspection
 # cd /www/server/mdserver-web && . bin/activate && python3 plugins/mysql/index.py set_slave_status {"close":"change"}
 # cd /www/server/mdserver-web && . bin/activate && python3 plugins/mysql/index.py set_root_pwd {"password":"root","force":"2"}
+# cd /www/server/mdserver-web && . bin/activate && python3 plugins/mysql/index.py get_table_list  {"dbname":"demo"}
 curPath=`pwd`
 rootPath=$(dirname "$curPath")
 rootPath=$(dirname "$rootPath")
@@ -62,6 +63,6 @@ bash -x $curPath/versions/$2/install.sh $1
 
 if [[ "${action}" = "install" ]] && [[ -d $serverPath/mysql ]]; then
 	#初始化 
-	cd ${rootPath} && python3 ${rootPath}/plugins/mysql/index.py start ${type}
-	cd ${rootPath} && python3 ${rootPath}/plugins/mysql/index.py initd_install ${type}
+	cd ${rootPath} && python3 plugins/mysql/index.py start ${type}
+	cd ${rootPath} && python3 plugins/mysql/index.py initd_install ${type}
 fi

@@ -136,12 +136,13 @@ def initConf():
             "/var/log/wtmp",
             "/var/log/secure",
             "/var/log/lastlog",
-            "/var/log/syslog",
             "/var/log/cron",
             "/www/wwwlogs",
             "/www/server/rsyncd",
             "/www/server/acme_pandominassl_apply",
             "/www/server/sphinx/index",
+            "/www/server/postgresql/logs",
+            "/www/server/manticoresearch",
             "/www/server/mongodb/logs",
             "/www/server/php/53/var/log",
             "/www/server/php/54/var/log",
@@ -255,6 +256,15 @@ def cleanRun():
     os.system(cmd)
     return mw.returnJson(True, '执行成功!')
 
+def cleanSpecialFile(file):
+    new_file = file.strip()
+    sf_list = ['/var/log/syslog', '/var/log/btmp', '/var/log/messages','/var/log/wtmp']
+    if mw.inArray(sf_list, new_file):
+        if os.path.isfile(new_file):
+            mw.writeFile(new_file, '')
+        return True
+    return False
+
 def cleanLog():
     conf = getConf()
     clist = mw.readFile(conf).strip()
@@ -270,12 +280,18 @@ def cleanLog():
             # print(data)
             continue
 
+        if cleanSpecialFile(abspath):
+            print("Special File:"+abspath)
+            continue
+
         if os.path.exists(abspath):
             if os.path.isfile(abspath):
+                print("File:"+abspath)
                 cleanSelfFileLog(abspath)
                 continue
 
             if os.path.isdir(abspath):
+                print("Dir:"+abspath)
                 cleanDirLog(abspath)
                 continue
 

@@ -54,7 +54,7 @@ Install_app()
 	# 	wget --no-check-certificate -O ${mariadbDir}/mariadb-${MY_VER}.tar.gz --tries=3 https://mirrors.aliyun.com/mariadb/mariadb-${MY_VER}/source/mariadb-${MY_VER}.tar.gz
 	# fi
 
-	# https://downloads.mariadb.org/interstitial/mariadb-10.9.1/source/mariadb-10.9.1.tar.gz
+	# https://downloads.mariadb.org/interstitial/mariadb-11.8.3/source/mariadb-11.8.3.tar.gz
 	if [ ! -f ${mariadbDir}/mariadb-${MY_VER}.tar.gz ];then
 		wget --no-check-certificate -O ${mariadbDir}/mariadb-${MY_VER}.tar.gz --tries=3 https://archive.mariadb.org/mariadb-${MY_VER}/source/mariadb-${MY_VER}.tar.gz
 	fi
@@ -72,6 +72,15 @@ Install_app()
 		INSTALL_CMD=cmake3
 	fi
 
+	WHERE_DIR_GCC=/usr/bin/gcc
+	WHERE_DIR_GPP=/usr/bin/g++
+
+	if [ "$sysName" == "Darwin" ];then
+		LLVM_DIR=`brew --prefix llvm`
+		WHERE_DIR_GCC=${LLVM_DIR}/bin/clang
+		WHERE_DIR_GPP=${LLVM_DIR}/bin/clang++
+	fi
+	
 	if [ ! -d $serverPath/mariadb ];then
 		cd ${mariadbDir}/mariadb-${MY_VER} && ${INSTALL_CMD} \
 		-DCMAKE_INSTALL_PREFIX=$serverPath/mariadb \
@@ -86,8 +95,8 @@ Install_app()
 		-DEXTRA_CHARSETS=all \
 		-DDEFAULT_CHARSET=utf8mb4 \
 		-DDEFAULT_COLLATION=utf8mb4_general_ci \
-		-DCMAKE_C_COMPILER=/usr/bin/gcc \
-		-DCMAKE_CXX_COMPILER=/usr/bin/g++
+		-DCMAKE_C_COMPILER=${WHERE_DIR_GCC} \
+		-DCMAKE_CXX_COMPILER=${WHERE_DIR_GPP}
 		make -j${cpuCore} && make install && make clean
 
 		if [ -d $serverPath/mariadb ];then

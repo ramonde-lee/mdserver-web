@@ -5,10 +5,18 @@ import io
 import os
 import time
 import re
+import threading
 import pymongo
 import json
 
 import core.mw as mw
+
+
+# 健康检查累计计数器快照：按实例和指标隔离，避免用启动以来的历史值判断当前状态。
+_health_counter_snapshots = {}
+_health_counter_lock = threading.Lock()
+_HEALTH_COUNTER_TTL = 6 * 60 * 60
+_HEALTH_COUNTER_CAPACITY = 512
 
 def singleton(cls):
     _instance = {}
@@ -31,6 +39,7 @@ class nosqlMySQL():
     __DB_HOST = '127.0.0.1'
     __DB_CONN = None
     __DB_ERR = None
+    __DB_STATUS = None
     __DB_SOCKET = None
 
     __DB_LOCAL = None
@@ -45,12 +54,18 @@ class nosqlMySQL():
     def conn(self):
 
         if self.__sid is None:
+            self.__DB_STATUS = 'not_installed'
             return False
 
         if self.__sid is not None:
             mycnf_path = "{}/{}/etc/my.cnf".format(mw.getServerDir(),self.__sid)
             if not os.path.exists(mycnf_path):
+                self.__DB_STATUS = 'not_installed'
                 return False
+
+        if not self.__config:
+            self.__DB_STATUS = 'not_installed'
+            return False
 
         self.__DB_PORT = int(self.__config['port'])
         self.__DB_USER = self.__config['username']
@@ -65,10 +80,18 @@ class nosqlMySQL():
             if self.__DB_SOCKET != '':
                 db.setSocket(self.__DB_SOCKET)
 
+            # 实际连通性检查：服务未启动或账号错误时返回 False，调用方统一提示
+            db.query('select 1')
+            self.__DB_STATUS = None
             return db
         except Exception:
-            self.__DB_ERR = mw.get_error_info()
+            self.__DB_ERR = mw.getTracebackInfo()
+        self.__DB_STATUS = 'not_running'
         return False
+
+    # 连接状态：not_installed 未安装 / not_running 未启动 / None 正常
+    def get_status(self):
+        return self.__DB_STATUS
 
     def sqliteDb(self, db_pos_name, dbname='databases'):
         mydb_path = mw.getServerDir() +'/'+db_pos_name
@@ -84,7 +107,7 @@ class nosqlMySQL():
         result['host'] = '127.0.0.1'
         result['username'] = 'root'
 
-        if sid in ['mysql', 'mysql-apt', 'mysql-yum', 'mysql-community']:
+        if sid in ['mysql', 'mysql-apt', 'mysql-yum', 'mysql-community','mariadb']:
             my_cnf_path = "{}/{}/etc/my.cnf".format(mw.getServerDir(),sid)
             if not os.path.exists(my_cnf_path):
                 return False
@@ -136,6 +159,10 @@ class nosqlMySQL():
         local_mysql_yum = "{}/mysql-community/etc/my.cnf".format(mw.getServerDir())
         if os.path.exists(local_mysql_yum):
             data.append({'name':'本地服务器[Tar]', 'val':'mysql-community'})
+
+        local_mysql_yum = "{}/mariadb/etc/my.cnf".format(mw.getServerDir())
+        if os.path.exists(local_mysql_yum):
+            data.append({'name':'本地服务器[mariadb]', 'val':'mariadb'})
         return mw.returnData(True, 'ok', data)
 
 @singleton
@@ -153,11 +180,20 @@ class nosqlMySQLCtr():
         instance.setSid(sid)
         return instance
 
+    def _connect(self, sid):
+        obj = self.getInstanceBySid(sid)
+        conn = obj.conn()
+        if conn is False:
+            if obj.get_status() == 'not_installed':
+                return None, mw.returnData(False, '未安装')
+            return None, mw.returnData(False, '未启动')
+        return conn, None
+
     def getDbList(self, args):
         sid = args['sid']
-        my_instance = self.getInstanceBySid(sid).conn()
-        if my_instance is False:
-            return mw.returnData(False,'无法链接')
+        my_instance, err = self._connect(sid)
+        if err:
+            return err
 
         result = {}
         db_list = my_instance.query('show databases')
@@ -172,9 +208,9 @@ class nosqlMySQLCtr():
         sid = args['sid']
         db = args['db']
 
-        my_instance = self.getInstanceBySid(sid).conn()
-        if my_instance is False:
-            return mw.returnData(False,'无法链接')
+        my_instance, err = self._connect(sid)
+        if err:
+            return err
 
         sql = "select * from information_schema.tables where table_schema = '"+db+"'"
         table_list = my_instance.query(sql)
@@ -226,9 +262,9 @@ class nosqlMySQLCtr():
                 else:
                     where_sql = ' where '+args_where['field'] + " like '%"+args_where['value']+"%' "
 
-        my_instance = self.getInstanceBySid(sid).conn()
-        if my_instance is False:
-            return mw.returnData(False,'无法链接')
+        my_instance, err = self._connect(sid)
+        if err:
+            return err
 
         my_instance.setDbName(db)
         sql = 'select count(*) as num from ' + table + where_sql
@@ -268,9 +304,9 @@ class nosqlMySQLCtr():
         sql = 'show processlist';
         sid = args['sid']
 
-        my_instance = self.getInstanceBySid(sid).conn()
-        if my_instance is False:
-            return mw.returnData(False,'无法链接')
+        my_instance, err = self._connect(sid)
+        if err:
+            return err
 
         result = my_instance.query(sql)
         rdata = {}
@@ -281,9 +317,9 @@ class nosqlMySQLCtr():
         sql = 'show status';
         sid = args['sid']
 
-        my_instance = self.getInstanceBySid(sid).conn()
-        if my_instance is False:
-            return mw.returnData(False,'无法链接')
+        my_instance, err = self._connect(sid)
+        if err:
+            return err
 
         result = my_instance.query(sql)
         rdata = {}
@@ -294,9 +330,9 @@ class nosqlMySQLCtr():
         sql = "show status like 'Com_%'";
         sid = args['sid']
 
-        my_instance = self.getInstanceBySid(sid).conn()
-        if my_instance is False:
-            return mw.returnData(False,'无法链接')
+        my_instance, err = self._connect(sid)
+        if err:
+            return err
 
         result = my_instance.query(sql)
         rdata = {}
@@ -329,49 +365,62 @@ class nosqlMySQLCtr():
 
 
     def getNetList(self, args):
+        """无阻塞 QPS/TPS/网络带宽指标: 用上次快照做差分, 不 sleep."""
         from datetime import datetime
         sid = args['sid']
-        my_instance = self.getInstanceBySid(sid).conn()
-        if my_instance is False:
-            return mw.returnData(False,'无法链接')
+        my_instance, err = self._connect(sid)
+        if err:
+            return err
 
-        rdata = []
-        row = {}
-        row1 = self.getNetRow(my_instance)
-        # 等待1秒
-        time.sleep(1)
-        row2 = self.getNetRow(my_instance)
+        # 初始化快照存储 (按 sid 区分, 支持多实例)
+        if not hasattr(self, '__net_snaps'):
+            self.__net_snaps = {}   # {sid: (timestamp, row_dict)}
+
+        curr = self.getNetRow(my_instance)
+        now = time.time()
+        snap = self.__net_snaps.get(sid)
+
+        if snap is None or (now - snap[0]) < 0.5:
+            # 第一次调用 / 间隔太短: 差分不可靠, 返回 0 并记录快照
+            diff_select = diff_insert = diff_update = diff_delete = 0.0
+            diff_recv = diff_send = 0.0
+        else:
+            prev_ts, prev = snap
+            elapsed = now - prev_ts
+            diff_select = round((int(curr['select']) - int(prev['select'])) / elapsed, 2)
+            diff_insert = round((int(curr['insert']) - int(prev['insert'])) / elapsed, 2)
+            diff_update = round((int(curr['update']) - int(prev['update'])) / elapsed, 2)
+            diff_delete = round((int(curr['delete']) - int(prev['delete'])) / elapsed, 2)
+            diff_recv = int(curr['recv_bytes']) - int(prev['recv_bytes'])
+            diff_send = int(curr['send_bytes']) - int(prev['send_bytes'])
+
+        self.__net_snaps[sid] = (now, curr)
 
         data = my_instance.find("SHOW GLOBAL VARIABLES LIKE 'max_connections'")
-        row['max_conn'] = data['Value']
+        max_conn = data['Value'] if data else '-'
 
         data = my_instance.find("SHOW GLOBAL STATUS LIKE 'Threads_connected'")
-        row['conn']  = data['Value']
+        conn = data['Value'] if data else '0'
 
-        current_time = datetime.now()
-        row['current_time'] = current_time.strftime("%Y-%m-%d %H:%M:%S")
+        row = {}
+        row['current_time'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        row['select'] = diff_select
+        row['insert'] = diff_insert
+        row['update'] = diff_update
+        row['delete'] = diff_delete
+        row['conn'] = conn
+        row['max_conn'] = max_conn
+        row['recv_mbps'] = "{:.2f} MBit/s".format(diff_recv * 8 / 1000000)
+        row['send_mbps'] = "{:.2f} MBit/s".format(diff_send * 8 / 1000000)
 
-        row['select'] = int(row2['select']) - int(row1['select'])
-        row['insert'] = int(row2['insert']) - int(row1['insert'])
-        row['update'] = int(row2['update']) - int(row1['update'])
-        row['delete'] = int(row2['delete']) - int(row1['delete'])
-
-        recv_per_second = int(row2['recv_bytes']) - int(row1['recv_bytes'])
-        send_per_second = int(row2['send_bytes']) - int(row1['send_bytes'])
-
-        # 将每秒接收和发送数据量从字节转换为兆比特
-        row['recv_mbps'] = "{:.2f}".format(recv_per_second * 8 / 1000000) + " MBit/s" 
-        row['send_mbps'] = "{:.2f}".format(send_per_second * 8 / 1000000) + " MBit/s"
-
-        rdata.append(row)
-        return mw.returnData(True, 'ok', rdata)
+        return mw.returnData(True, 'ok', [row])
 
 
     def getTopnList(self, args):
         sid = args['sid']
-        my_instance = self.getInstanceBySid(sid).conn()
-        if my_instance is False:
-            return mw.returnData(False,'无法链接')
+        my_instance, err = self._connect(sid)
+        if err:
+            return err
 
         is_performance_schema = my_instance.find("SELECT @@performance_schema")
         if is_performance_schema is None:
@@ -399,9 +448,9 @@ class nosqlMySQLCtr():
     # 查看重复或冗余的索引
     def getRedundantIndexes(self, args):
         sid = args['sid']
-        my_instance = self.getInstanceBySid(sid).conn()
-        if my_instance is False:
-            return mw.returnData(False,'无法链接')
+        my_instance, err = self._connect(sid)
+        if err:
+            return err
 
         is_performance_schema = my_instance.find("SELECT @@performance_schema")
         if is_performance_schema["@@performance_schema"] == 0:
@@ -417,9 +466,9 @@ class nosqlMySQLCtr():
 
     def redundantIndexesCmd(self, args):
         sid = args['sid']
-        my_instance = self.getInstanceBySid(sid).conn()
-        if my_instance is False:
-            return mw.returnData(False,'无法链接')
+        my_instance, err = self._connect(sid)
+        if err:
+            return err
 
         is_performance_schema = my_instance.find("SELECT @@performance_schema")
         if is_performance_schema["@@performance_schema"] == 0:
@@ -442,28 +491,47 @@ class nosqlMySQLCtr():
         from decimal import Decimal
 
         sid = args['sid']
-        my_instance = self.getInstanceBySid(sid).conn()
-        if my_instance is False:
-            return mw.returnData(False,'无法链接')
+        my_instance, err = self._connect(sid)
+        if err:
+            return err
 
         my_instance.execute("SET sql_mode=(SELECT REPLACE(@@sql_mode,'ONLY_FULL_GROUP_BY',''))")
+
+        # ANY_VALUE 是 MySQL 5.7+ 的函数,MariaDB 不支持(报 FUNCTION ANY_VALUE does not exist);
+        # 上面已去掉 ONLY_FULL_GROUP_BY,MariaDB 可直接取非聚合字段
+        ver = my_instance.find("SELECT @@version as db_version")
+        is_mariadb = ver is not None and 'MariaDB' in str(ver.get('db_version', ''))
+
+        def any_val(expr):
+            return expr if is_mariadb else 'ANY_VALUE(' + expr + ')'
+
         data = my_instance.query(
             """
             SELECT t.TABLE_SCHEMA as TABLE_SCHEMA, t.TABLE_NAME as TABLE_NAME,
-                ANY_VALUE(t.ENGINE) as ENGINE,
-                ANY_VALUE(IFNULL(t.DATA_LENGTH/1024/1024/1024, 0)) as DATA_LENGTH,
-                ANY_VALUE(IFNULL(t.INDEX_LENGTH/1024/1024/1024, 0)) as INDEX_LENGTH,
-                ANY_VALUE(IFNULL((t.DATA_LENGTH+t.INDEX_LENGTH)/1024/1024/1024, 0)) AS TOTAL_LENGTH,
-                ANY_VALUE(c.column_name) AS COLUMN_NAME, ANY_VALUE(c.data_type) AS DATA_TYPE,
-                ANY_VALUE(c.COLUMN_TYPE) AS COLUMN_TYPE,
-                ANY_VALUE(t.AUTO_INCREMENT) AS AUTO_INCREMENT,
-                ANY_VALUE(locate('unsigned', c.COLUMN_TYPE) = 0) AS IS_SIGNED 
-            FROM information_schema.TABLES t 
-            JOIN information_schema.COLUMNS c ON t.TABLE_SCHEMA = c.TABLE_SCHEMA AND t.table_name=c.table_name 
-            WHERE t.TABLE_SCHEMA NOT IN ('mysql', 'information_schema', 'performance_schema', 'sys') 
-            GROUP BY t.TABLE_SCHEMA, t.TABLE_NAME 
+                {engine} as ENGINE,
+                {data_length} as DATA_LENGTH,
+                {index_length} as INDEX_LENGTH,
+                {total_length} AS TOTAL_LENGTH,
+                {column_name} AS COLUMN_NAME, {data_type} AS DATA_TYPE,
+                {column_type} AS COLUMN_TYPE,
+                {auto_increment} AS AUTO_INCREMENT,
+                {is_signed} AS IS_SIGNED
+            FROM information_schema.TABLES t
+            JOIN information_schema.COLUMNS c ON t.TABLE_SCHEMA = c.TABLE_SCHEMA AND t.table_name=c.table_name
+            WHERE t.TABLE_SCHEMA NOT IN ('mysql', 'information_schema', 'performance_schema', 'sys')
+            GROUP BY t.TABLE_SCHEMA, t.TABLE_NAME
             ORDER BY TOTAL_LENGTH DESC, AUTO_INCREMENT DESC
-            """
+            """.format(
+                engine=any_val("t.ENGINE"),
+                data_length=any_val("IFNULL(t.DATA_LENGTH/1024/1024/1024, 0)"),
+                index_length=any_val("IFNULL(t.INDEX_LENGTH/1024/1024/1024, 0)"),
+                total_length=any_val("IFNULL((t.DATA_LENGTH+t.INDEX_LENGTH)/1024/1024/1024, 0)"),
+                column_name=any_val("c.column_name"),
+                data_type=any_val("c.data_type"),
+                column_type=any_val("c.COLUMN_TYPE"),
+                auto_increment=any_val("t.AUTO_INCREMENT"),
+                is_signed=any_val("locate('unsigned', c.COLUMN_TYPE) = 0"),
+            )
         )
 
         if data is None:
@@ -520,9 +588,9 @@ class nosqlMySQLCtr():
     # 查看应用端IP连接数总和
     def getConnCount(self, args):
         sid = args['sid']
-        my_instance = self.getInstanceBySid(sid).conn()
-        if my_instance is False:
-            return mw.returnData(False,'无法链接')
+        my_instance, err = self._connect(sid)
+        if err:
+            return err
 
         data = my_instance.query(
             "SELECT user,db,substring_index(HOST,':',1) AS Client_IP,count(1) AS count FROM information_schema.PROCESSLIST "
@@ -544,9 +612,9 @@ class nosqlMySQLCtr():
     # 快速找出没有主键的表
     def getFpkInfo(self, args):
         sid = args['sid']
-        my_instance = self.getInstanceBySid(sid).conn()
-        if my_instance is False:
-            return mw.returnData(False,'无法链接')
+        my_instance, err = self._connect(sid)
+        if err:
+            return err
 
         data = my_instance.query(
             """
@@ -566,9 +634,9 @@ class nosqlMySQLCtr():
 
     def getLockSql(self, args):
         sid = args['sid']
-        my_instance = self.getInstanceBySid(sid).conn()
-        if my_instance is False:
-            return mw.returnData(False,'无法链接')
+        my_instance, err = self._connect(sid)
+        if err:
+            return err
 
         data = my_instance.query(
             """
@@ -597,9 +665,9 @@ class nosqlMySQLCtr():
 
     def killLockPid(self, args):
         sid = args['sid']
-        my_instance = self.getInstanceBySid(sid).conn()
-        if my_instance is False:
-            return mw.returnData(False,'无法链接')
+        my_instance, err = self._connect(sid)
+        if err:
+            return err
 
         pid = args['pid']
         my_instance.execute('kill %s' % pid)
@@ -607,9 +675,9 @@ class nosqlMySQLCtr():
 
     def killAllLock(self, args):
         sid = args['sid']
-        my_instance = self.getInstanceBySid(sid).conn()
-        if my_instance is False:
-            return mw.returnData(False,'无法链接')
+        my_instance, err = self._connect(sid)
+        if err:
+            return err
 
         data = self.getLockSql(args)
         if data['status']:
@@ -624,9 +692,9 @@ class nosqlMySQLCtr():
 
     def getDeadlockInfo(self, args):
         sid = args['sid']
-        my_instance = self.getInstanceBySid(sid).conn()
-        if my_instance is False:
-            return mw.returnData(False,'无法链接')
+        my_instance, err = self._connect(sid)
+        if err:
+            return err
 
         data = my_instance.find("SHOW ENGINE INNODB STATUS")
         if data is not None:
@@ -639,17 +707,20 @@ class nosqlMySQLCtr():
 
     def getSlaveStatus(self, args):
         sid = args['sid']
-        my_instance = self.getInstanceBySid(sid).conn()
-        if my_instance is False:
-            return mw.returnData(False,'无法链接')
+        my_instance, err = self._connect(sid)
+        if err:
+            return err
 
         # MySQL 8.0.22+ 使用 SHOW REPLICA STATUS，MySQL 9.0 已移除 SHOW SLAVE STATUS
-        slave_data = my_instance.query('SHOW REPLICA STATUS')
-        if isinstance(slave_data, Exception):
+        # 注意: ORM.query 失败会直接抛异常,不会返回 Exception 对象
+        try:
+            slave_data = my_instance.query('SHOW REPLICA STATUS')
+        except Exception:
             # 兼容 MySQL 8.0.22 以下及旧版 MariaDB
-            slave_data = my_instance.query('SHOW SLAVE STATUS')
-        if isinstance(slave_data, Exception):
-            return mw.returnData(False, '获取主从状态失败: ' + str(slave_data))
+            try:
+                slave_data = my_instance.query('SHOW SLAVE STATUS')
+            except Exception as e:
+                return mw.returnData(False, '获取主从状态失败: ' + str(e))
         if slave_data is None or len(slave_data) == 0:
             return mw.returnData(True, 'ok', '未开启从库!')
 
@@ -673,8 +744,11 @@ class nosqlMySQLCtr():
         else:
             msg = '主从复制报错，请检查\nSlave_IO_Running状态值是：%s, |  Slave_SQL_Running状态值是：%s\nLast_Error错误信息是：%s\nLast_SQL_Error错误信息是：%s\n' \
             % (io_running, sql_running, slave_info.get('Last_Error'), slave_info.get('Last_SQL_Error'))
-            error_data = my_instance.query('select LAST_ERROR_NUMBER,LAST_ERROR_MESSAGE,LAST_ERROR_TIMESTAMP from performance_schema.replication_applier_status_by_worker ORDER BY LAST_ERROR_TIMESTAMP desc limit 1')
-            if isinstance(error_data, Exception) or not error_data:
+            try:
+                error_data = my_instance.query('select LAST_ERROR_NUMBER,LAST_ERROR_MESSAGE,LAST_ERROR_TIMESTAMP from performance_schema.replication_applier_status_by_worker ORDER BY LAST_ERROR_TIMESTAMP desc limit 1')
+            except Exception:
+                error_data = None
+            if not error_data:
                 msg += 'MySQL Replication Health is NOT OK!'
                 return mw.returnData(True, 'ok', msg)
             error_dict = error_data[0]
@@ -683,6 +757,980 @@ class nosqlMySQLCtr():
             msg += '报错时间是：%s \n' % error_dict['LAST_ERROR_TIMESTAMP']
             msg += 'MySQL Replication Health is NOT OK!'
             return mw.returnData(True, 'ok', msg)
+
+    def getSlaveRuntime(self, args):
+        sid = args['sid']
+        my_instance, err = self._connect(sid)
+        if err:
+            return err
+
+        try:
+            slave_data = my_instance.query('SHOW REPLICA STATUS')
+        except Exception:
+            # 兼容 MySQL 8.0.22 以下及旧版 MariaDB
+            try:
+                slave_data = my_instance.query('SHOW SLAVE STATUS')
+            except Exception as e:
+                return mw.returnData(False, '获取主从状态失败: ' + str(e))
+        if slave_data is None or len(slave_data) == 0:
+            return mw.returnData(False, 'ok', '未开启从库!')
+        # print(slave_data)
+
+        time_unix = mw.getDate()
+        data = {
+            'time':time_unix,
+            'data':slave_data[0],
+        }
+        return mw.returnData(True, 'ok', data)
+
+    def _get_var_or_status(self, my_instance, sql, default=None):
+        """返回数值；None 表示查询失败、无权限、无此指标或值无法解析。"""
+        try:
+            row = my_instance.find(sql)
+            if row is None:
+                return default
+            v = list(row.values())[-1] if isinstance(row, dict) else row[1]
+            try:
+                return int(v)
+            except (ValueError, TypeError):
+                try:
+                    return float(v)
+                except (ValueError, TypeError):
+                    return default
+        except Exception:
+            return default
+
+    def _get_var_str(self, my_instance, sql, default=None):
+        """返回字符串并保留合法空串；None 表示查询失败或指标不存在。"""
+        try:
+            row = my_instance.find(sql)
+            if row is None:
+                return default
+            v = list(row.values())[-1] if isinstance(row, dict) else row[1]
+            return str(v) if v is not None else default
+        except Exception:
+            return default
+
+    def _get_innodb_metric(self, my_instance, name):
+        """读取版本相关的 INNODB_METRICS 指标，返回 (数值, 状态)。"""
+        try:
+            rows = my_instance.query(
+                "SELECT COUNT AS metric_value, STATUS AS metric_status "
+                "FROM information_schema.INNODB_METRICS WHERE NAME='%s'" % name
+            )
+            if not rows:
+                return None, 'unsupported'
+            row = rows[0]
+            status = str(row.get('metric_status') or 'unknown').lower()
+            if status != 'enabled':
+                return None, status
+            return int(row['metric_value']), status
+        except (KeyError, TypeError, ValueError):
+            return None, 'invalid'
+        except Exception:
+            return None, 'query_failed'
+
+    def _sample_health_counter(self, sid, name, value, now=None):
+        """采样启动累计值，返回首轮、增量或回退状态，不在查询线程中 sleep。"""
+        if value is None:
+            return None
+        now = time.monotonic() if now is None else now
+        key = (sid, name)
+        with _health_counter_lock:
+            for old_key, (ts, _value) in list(_health_counter_snapshots.items()):
+                if now - ts > _HEALTH_COUNTER_TTL:
+                    _health_counter_snapshots.pop(old_key, None)
+            previous = _health_counter_snapshots.get(key)
+            while key not in _health_counter_snapshots and len(_health_counter_snapshots) >= _HEALTH_COUNTER_CAPACITY:
+                oldest_key = min(_health_counter_snapshots, key=lambda k: _health_counter_snapshots[k][0])
+                _health_counter_snapshots.pop(oldest_key, None)
+            _health_counter_snapshots[key] = (now, value)
+
+        if previous is None:
+            return {'state': 'first', 'value': value, 'delta': None, 'rate': None, 'elapsed': None}
+        elapsed = now - previous[0]
+        if value < previous[1] or elapsed <= 0:
+            return {'state': 'reset', 'value': value, 'delta': None, 'rate': None, 'elapsed': max(elapsed, 0)}
+        delta = value - previous[1]
+        return {
+            'state': 'normal', 'value': value, 'delta': delta,
+            'rate': delta / elapsed, 'elapsed': elapsed,
+        }
+
+    def getHealth(self, args):
+        """综合 MySQL 健康检查 + 可操作优化建议.
+        返回结构化文本, 前端直接放到 textarea 展示."""
+        sid = args['sid']
+        my_instance, err = self._connect(sid)
+        if err:
+            return err
+
+        lines = []
+        # issues: [(level, section_label, text)]  2=严重 1=警告 0=建议 -1=未知
+        issues = []
+        current_section = ''
+
+        def section(title):
+            nonlocal current_section
+            current_section = title
+            lines.append('')
+            lines.append('━━━ %s ━━━' % title)
+
+        def ok(msg):
+            lines.append('  ✅ ' + msg)
+
+        def critical(msg):
+            issues.append((2, current_section, '🚨 ' + msg))
+            lines.append('  🚨 ' + msg)
+
+        def warn(msg):
+            issues.append((1, current_section, '⚠️  ' + msg))
+            lines.append('  ⚠️  ' + msg)
+
+        def tip(msg):
+            issues.append((0, current_section, '💡 ' + msg))
+            lines.append('  💡 ' + msg)
+
+        def unknown(msg):
+            issues.append((-1, current_section, '❓ unknown: ' + msg))
+            lines.append('  ❓ unknown: ' + msg)
+
+        def info(msg):
+            lines.append('  ℹ️   ' + msg)
+
+        def counter_info(label, sample, unit='次'):
+            if sample['state'] == 'first':
+                info('%s累计=%s, 首次采样, 下次检查显示间隔增量/速率' % (label, sample['value']))
+            elif sample['state'] == 'reset':
+                info('%s累计=%s, 计数器回退或时间异常, 已重建基线, 本次不计算增量' % (label, sample['value']))
+            else:
+                rate = '%.2f%s/秒' % (sample['rate'], unit)
+                info('%s累计=%s, 间隔增量=%s%s, 速率=%s' % (
+                    label, sample['value'], sample['delta'], unit, rate))
+
+        # ---------- 0. 基础信息 ----------
+        section('基础信息')
+        ver = self._get_var_str(my_instance, "SELECT @@version")
+        uptime = self._get_var_or_status(my_instance, "SHOW GLOBAL STATUS LIKE 'Uptime'")
+        pfs = self._get_var_or_status(my_instance, "SELECT @@performance_schema")
+        # 解析版本号: 5.7.39-log / 8.0.36-log / 11.4.4-MariaDB；兼容 MariaDB 的 5.5.5- 前缀。
+        _is_mariadb = ver is not None and 'mariadb' in ver.lower()
+        _m = re.match(r'^(?:5\.5\.5-)?(\d+)\.(\d+)(?:\.(\d+))?', ver) if ver is not None else None
+        _major = int(_m.group(1)) if _m else 0
+        _minor = int(_m.group(2)) if _m else 0
+        _patch = int(_m.group(3) or 0) if _m else 0
+        _version_known = _m is not None
+        if ver is None:
+            unknown('版本查询失败或权限不足')
+        elif not _version_known:
+            unknown('无法解析版本号: %s' % ver)
+        info('版本: %s' % (ver if ver is not None else 'unknown'))
+        if uptime is None:
+            unknown('Uptime 查询失败、不支持或权限不足')
+        else:
+            if uptime >= 86400:
+                uptime_txt = '%d天%02d:%02d:%02d' % (
+                    uptime // 86400, (uptime % 86400) // 3600,
+                    (uptime % 3600) // 60, uptime % 60)
+            elif uptime >= 3600:
+                uptime_txt = '%d小时%02d分钟' % (uptime // 3600, (uptime % 3600) // 60)
+            else:
+                uptime_txt = '%d分钟' % (uptime // 60)
+            info('已运行: %s' % uptime_txt)
+        if pfs is None:
+            unknown('performance_schema 状态查询失败、不支持或权限不足')
+        elif pfs:
+            ok('performance_schema 已开启 (可识别热点 SQL / 冗余索引)')
+        else:
+            warn('performance_schema 未开启, 建议 my.cnf 里加 performance_schema=1 并重启')
+
+        # ---------- 1. 连接数水位 ----------
+        section('连接数 / 线程缓存')
+        tc = self._get_var_or_status(my_instance, "SHOW GLOBAL STATUS LIKE 'Threads_connected'")
+        mc = self._get_var_or_status(my_instance, "SHOW GLOBAL VARIABLES LIKE 'max_connections'")
+        if tc is None or mc is None:
+            unknown('Threads_connected 或 max_connections 查询失败、不支持或权限不足')
+        elif mc <= 0:
+            info('当前连接=%s, max_connections=%s, 无法计算连接水位' % (tc, mc))
+        else:
+            tc_rate = tc / mc * 100
+            info('当前连接 %d / max_connections=%d (%.1f%%)' % (tc, mc, tc_rate))
+            if tc_rate >= 90:
+                critical('连接数已到 max_connections 的 %.0f%%, 随时可能出现 "too many connections" 拒绝' % tc_rate)
+                critical('建议: 1) 应用端检查连接泄露  2) max_connections 上调  3) 检查 wait_timeout')
+            elif tc_rate >= 80:
+                critical('连接数水位偏高 (%.1f%%), 建议排查' % tc_rate)
+            elif tc_rate >= 50:
+                warn('连接数水位偏高, 建议持续关注')
+            else:
+                ok('连接数水位正常')
+
+        tc_total = self._get_var_or_status(my_instance, "SHOW GLOBAL STATUS LIKE 'Threads_created'")
+        conn_total = self._get_var_or_status(my_instance, "SHOW GLOBAL STATUS LIKE 'Connections'")
+        if tc_total is None or conn_total is None:
+            unknown('Threads_created 或 Connections 查询失败、不支持或权限不足')
+        else:
+            tc_sample = self._sample_health_counter(sid, 'Threads_created', tc_total)
+            conn_sample = self._sample_health_counter(sid, 'Connections', conn_total)
+            counter_info('Threads_created ', tc_sample)
+            counter_info('Connections ', conn_sample)
+            if tc_sample['state'] == 'normal' and conn_sample['state'] == 'normal':
+                if conn_sample['delta'] > 0:
+                    t_created_rate = tc_sample['delta'] / conn_sample['delta'] * 100
+                    info('采样间隔 Thread 创建比例: %.2f%%' % t_created_rate)
+                    if t_created_rate >= 10:
+                        warn('采样间隔 Thread 创建比例偏高, thread_cache_size 可能过小')
+                        warn('建议: my.cnf 里设置 thread_cache_size = %d (CPU 核数的 2~4 倍)' % (
+                            os.cpu_count() * 3 if os.cpu_count() else 16))
+                    else:
+                        ok('采样间隔线程缓存命中率正常')
+                else:
+                    info('采样间隔无新增连接, 暂不评估 Thread 创建比例')
+
+        ac = self._get_var_or_status(my_instance, "SHOW GLOBAL STATUS LIKE 'Aborted_connects'")
+        if ac is None:
+            unknown('Aborted_connects 查询失败、不支持或权限不足')
+        else:
+            ac_sample = self._sample_health_counter(sid, 'Aborted_connects', ac)
+            counter_info('Aborted_connects ', ac_sample)
+            if ac_sample['state'] == 'normal':
+                if ac_sample['delta'] > 0:
+                    warn('采样间隔新增 Aborted_connects=%s (认证失败 / 超时 / 连接被意外关闭)' % ac_sample['delta'])
+                    warn('建议: 排查应用端账号密码、wait_timeout 配置、网络抖动')
+                else:
+                    ok('采样间隔无新增异常连接')
+
+        # ---------- 2. InnoDB Buffer Pool ----------
+        section('InnoDB Buffer Pool')
+        br = self._get_var_or_status(my_instance, "SHOW GLOBAL STATUS LIKE 'Innodb_buffer_pool_reads'")
+        brr = self._get_var_or_status(my_instance, "SHOW GLOBAL STATUS LIKE 'Innodb_buffer_pool_read_requests'")
+        br_sample = brr_sample = None
+        if br is None or brr is None:
+            unknown('InnoDB Buffer Pool 读指标查询失败、不支持或权限不足')
+        else:
+            br_sample = self._sample_health_counter(sid, 'Innodb_buffer_pool_reads', br)
+            brr_sample = self._sample_health_counter(sid, 'Innodb_buffer_pool_read_requests', brr)
+            counter_info('Innodb_buffer_pool_reads ', br_sample)
+            counter_info('Innodb_buffer_pool_read_requests ', brr_sample)
+            if brr <= 0:
+                info('Buffer Pool 总请求=0, 累计命中率暂不评估')
+            elif br < 0 or br > brr:
+                info('累计 Buffer Pool 计数器口径不一致 (reads=%d > read_requests=%d), 命中率不评估' % (br, brr))
+            else:
+                info('启动以来累计命中率: %.2f%% (仅作历史参考)' % ((1 - br / brr) * 100))
+
+        bpsize = self._get_var_or_status(my_instance, "SHOW GLOBAL VARIABLES LIKE 'innodb_buffer_pool_size'")
+        bpsize_pct = -1
+        bpsize_mb = None
+        if bpsize is None:
+            unknown('innodb_buffer_pool_size 查询失败、不支持或权限不足')
+        else:
+            bpsize_mb = bpsize / 1024 / 1024
+            try:
+                import psutil
+                total_mem_mb = psutil.virtual_memory().total / 1024 / 1024
+                bpsize_pct = bpsize / (total_mem_mb * 1024 * 1024) * 100
+                info('innodb_buffer_pool_size=%.0fMB (%.1f%% of total memory %.0fMB)' % (bpsize_mb, bpsize_pct, total_mem_mb))
+            except Exception:
+                info('innodb_buffer_pool_size=%.0fMB (物理内存占比未知)' % bpsize_mb)
+
+        if br_sample is not None and brr_sample is not None and br_sample['state'] == 'normal' and brr_sample['state'] == 'normal':
+            if brr_sample['delta'] > 0 and br_sample['delta'] > brr_sample['delta']:
+                info('采样间隔 Buffer Pool 物理读计数大于逻辑请求, 命中率不评估')
+            elif brr_sample['delta'] > 0:
+                hit = (1 - br_sample['delta'] / brr_sample['delta']) * 100
+                info('采样间隔 Buffer Pool 命中率: %.2f%%' % hit)
+                if hit >= 99:
+                    ok('采样间隔命中率极佳')
+                elif hit >= 95:
+                    ok('采样间隔命中率良好, 可维持现状')
+                elif hit >= 85:
+                    warn('采样间隔命中率偏低 (%.2f%%), 磁盘读多会拖慢响应' % hit)
+                else:
+                    critical('采样间隔 Buffer Pool 命中率严重偏低 (%.2f%%), 磁盘读成为瓶颈' % hit)
+                    if bpsize_pct >= 0 and bpsize_pct < 50:
+                        critical('建议评估调大 innodb_buffer_pool_size 到物理内存的 50~75%')
+                        critical('当前 %.0fMB, 可调到 %.0fMB~%.0fMB' % (
+                            bpsize_mb, total_mem_mb * 0.5, total_mem_mb * 0.75))
+            else:
+                info('采样间隔无 Buffer Pool 读请求, 暂不评估命中率')
+
+        ilw = self._get_var_or_status(my_instance, "SHOW GLOBAL STATUS LIKE 'Innodb_log_waits'")
+        ilw_sample = None
+        if ilw is None:
+            unknown('Innodb_log_waits 查询失败、不支持或权限不足')
+        else:
+            ilw_sample = self._sample_health_counter(sid, 'Innodb_log_waits', ilw)
+            counter_info('Innodb_log_waits ', ilw_sample)
+            if ilw_sample['state'] == 'normal':
+                if ilw_sample['delta'] > 0:
+                    warn('采样间隔新增 Innodb_log_waits=%s (Redo Log 写满导致等待)' % ilw_sample['delta'])
+                    warn('建议: 增大 innodb_log_buffer_size, 或增大 innodb_redo_log_capacity (MySQL 8.0)')
+                else:
+                    ok('采样间隔无新增 Redo Log 等待')
+
+        rlw = self._get_var_or_status(my_instance, "SHOW GLOBAL STATUS LIKE 'Innodb_row_lock_waits'")
+        rla = self._get_var_or_status(my_instance, "SHOW GLOBAL STATUS LIKE 'Innodb_row_lock_time_avg'")
+        rlt = self._get_var_or_status(my_instance, "SHOW GLOBAL STATUS LIKE 'Innodb_row_lock_time'")
+        rlw_sample = rlt_sample = None
+        if rlw is None:
+            unknown('Innodb_row_lock_waits 查询失败、不支持或权限不足')
+        else:
+            rlw_sample = self._sample_health_counter(sid, 'Innodb_row_lock_waits', rlw)
+            counter_info('Innodb_row_lock_waits ', rlw_sample)
+        if rlt is None:
+            unknown('Innodb_row_lock_time 查询失败、不支持或权限不足')
+        else:
+            rlt_sample = self._sample_health_counter(sid, 'Innodb_row_lock_time', rlt)
+            counter_info('Innodb_row_lock_time ', rlt_sample, 'ms')
+        if rla is None:
+            unknown('Innodb_row_lock_time_avg 查询失败、不支持或权限不足')
+        else:
+            info('Innodb_row_lock_time_avg=%sms (启动以来历史平均值)' % rla)
+        if rlw_sample is not None and rlw_sample['state'] == 'normal':
+            if rlw_sample['delta'] > 0:
+                wait_delta = rlt_sample['delta'] if rlt_sample is not None and rlt_sample['state'] == 'normal' else 'unknown'
+                warn('采样间隔新增行锁等待=%s 次, 等待时间增量=%sms' % (rlw_sample['delta'], wait_delta))
+                warn('建议: 应用层排查热点行 (短事务、合理索引、避免长 SELECT ... FOR UPDATE)')
+            else:
+                ok('采样间隔无新增行锁等待')
+
+        # MariaDB 10.5+ 提供 Innodb_deadlocks；MySQL 及旧版 MariaDB 使用 INNODB_METRICS。
+        deadlocks = self._get_var_or_status(my_instance, "SHOW GLOBAL STATUS LIKE 'Innodb_deadlocks'")
+        deadlock_name = 'Innodb_deadlocks'
+        deadlock_metric_status = None
+        if deadlocks is None:
+            deadlock_name = 'INNODB_METRICS.lock_deadlocks'
+            deadlocks, deadlock_metric_status = self._get_innodb_metric(my_instance, 'lock_deadlocks')
+        if deadlocks is None:
+            unknown('InnoDB 全局死锁计数不可用 (lock_deadlocks: %s)' % deadlock_metric_status)
+        else:
+            deadlock_sample = self._sample_health_counter(sid, deadlock_name, deadlocks)
+            counter_info(deadlock_name + ' ', deadlock_sample)
+            if deadlock_sample['state'] == 'normal':
+                if deadlock_sample['delta'] > 0:
+                    warn('采样间隔新增 InnoDB 死锁 %s 次, 应用层有事务并发冲突' % deadlock_sample['delta'])
+                    warn('建议: SHOW ENGINE INNODB STATUS 查最近死锁, 固定锁顺序、缩短事务并加重试')
+                else:
+                    ok('采样间隔无新增死锁')
+
+        # ---------- 2.5 文件描述符 / 表缓存 ----------
+        section('文件与表缓存')
+        ofl = self._get_var_or_status(my_instance, "SHOW GLOBAL VARIABLES LIKE 'open_files_limit'")
+        of = self._get_var_or_status(my_instance, "SHOW GLOBAL STATUS LIKE 'Opened_files'")
+        opn = self._get_var_or_status(my_instance, "SHOW GLOBAL STATUS LIKE 'Open_files'")
+        if ofl is None or opn is None:
+            unknown('open_files_limit 或 Open_files 查询失败、不支持或权限不足')
+        elif ofl <= 0:
+            info('open_files_limit=%s, Open_files=%s, 无法计算文件描述符水位' % (ofl, opn))
+        else:
+            opn_pct = opn / ofl * 100
+            info('open_files_limit=%d, Open_files=%d (%.1f%%)' % (ofl, opn, opn_pct))
+            if opn_pct >= 80:
+                warn('当前打开文件数已达 open_files_limit 的 %.1f%%, 可能无法再打开新表 / 日志' % opn_pct)
+                warn('my.cnf: open_files_limit=65535 (需同时在 OS 层 ulimit -n 调大)')
+            else:
+                ok('文件描述符水位正常 (%.1f%%)' % opn_pct)
+        if of is None:
+            unknown('Opened_files 查询失败、不支持或权限不足')
+        else:
+            of_sample = self._sample_health_counter(sid, 'Opened_files', of)
+            counter_info('Opened_files ', of_sample)
+
+        toc = self._get_var_or_status(my_instance, "SHOW GLOBAL VARIABLES LIKE 'table_open_cache'")
+        ot = self._get_var_or_status(my_instance, "SHOW GLOBAL STATUS LIKE 'Opened_tables'")
+        oft = self._get_var_or_status(my_instance, "SHOW GLOBAL STATUS LIKE 'Open_tables'")
+        if toc is None:
+            unknown('table_open_cache 查询失败、不支持或权限不足')
+        else:
+            info('table_open_cache=%s' % toc)
+        if oft is None:
+            unknown('Open_tables 查询失败、不支持或权限不足')
+        else:
+            info('Open_tables=%s (当前打开表数量)' % oft)
+        if ot is None:
+            unknown('Opened_tables 查询失败、不支持或权限不足')
+        else:
+            ot_sample = self._sample_health_counter(sid, 'Opened_tables', ot)
+            counter_info('Opened_tables ', ot_sample)
+            if oft is not None and ot_sample['state'] == 'normal':
+                denominator = ot_sample['delta'] + oft
+                if denominator > 0:
+                    table_hit = (1 - ot_sample['delta'] / denominator) * 100
+                    info('采样间隔表缓存命中率估算: %.2f%%' % table_hit)
+                    if ot_sample['delta'] > 0 and table_hit < 85:
+                        warn('采样间隔表缓存命中率 %.1f%% 偏低, 可能频繁重新打开表' % table_hit)
+                        if toc is not None:
+                            warn('建议将 table_open_cache 从 %d 逐步调整至 2048~5000, 并结合业务表数量、并发和 open_files_limit 评估' % toc)
+                    else:
+                        ok('采样间隔表缓存使用正常')
+                else:
+                    ok('采样间隔无新增表打开, 当前也无打开表')
+
+        # ---------- 2.6 字符集 ----------
+        section('字符集 / 排序规则')
+        cs = self._get_var_str(my_instance, "SHOW GLOBAL VARIABLES LIKE 'character_set_server'")
+        coll = self._get_var_str(my_instance, "SHOW GLOBAL VARIABLES LIKE 'collation_server'")
+        if cs is None:
+            unknown('character_set_server 查询失败、不支持或权限不足')
+        else:
+            info('character_set_server=%s' % cs)
+            if cs.lower() == 'utf8mb4':
+                ok('server 字符集 utf8mb4 (完整 Unicode, 含 emoji)')
+            else:
+                warn('server 字符集是 %s, 建议 my.cnf 改为 utf8mb4 以支持完整 emoji 和 4 字节汉字' % cs)
+                warn('my.cnf: character-set-server=utf8mb4, collation-server=utf8mb4_unicode_ci')
+        if coll is None:
+            unknown('collation_server 查询失败、不支持或权限不足')
+        else:
+            info('collation_server=%s' % coll)
+        # 业务表是否有非 utf8mb4
+        try:
+            non_utf8mb4 = my_instance.query(
+                "SELECT table_schema AS table_schema, table_name AS table_name, table_collation AS table_collation FROM information_schema.tables "
+                "WHERE table_schema NOT IN ('mysql','information_schema','performance_schema','sys') "
+                "AND table_collation LIKE 'utf8%' AND table_collation NOT LIKE 'utf8mb4%' LIMIT 20"
+            )
+            if non_utf8mb4 is None:
+                unknown('非 utf8mb4 业务表检查返回失败')
+            elif non_utf8mb4:
+                non_utf8mb4_total = len(non_utf8mb4)
+                if non_utf8mb4_total >= 20:
+                    count_rows = my_instance.query(
+                        "SELECT COUNT(*) AS total FROM information_schema.tables "
+                        "WHERE table_schema NOT IN ('mysql','information_schema','performance_schema','sys') "
+                        "AND table_collation LIKE 'utf8%' AND table_collation NOT LIKE 'utf8mb4%'"
+                    )
+                    non_utf8mb4_total = int(count_rows[0]['total'])
+                warn('发现 %d 张业务表仍在用 utf8 (3 字节, 存不下 emoji, 最多展示 5 个样本)' % non_utf8mb4_total)
+                for r in non_utf8mb4[:5]:
+                    warn('  %s.%s  collation=%s' % (r['table_schema'], r['table_name'], r['table_collation']))
+                warn('升级方式: 评估兼容性并备份后, 在低峰执行 ALTER TABLE ... CONVERT TO CHARACTER SET utf8mb4')
+            else:
+                ok('未发现仍使用 utf8 的业务表')
+        except Exception as ex:
+            unknown('非 utf8mb4 业务表检查失败、不支持或权限不足: %s' % str(ex))
+
+        # ---------- 2.7 Binlog / 持久化安全 ----------
+        section('Binlog / Durability')
+        sync_b = self._get_var_or_status(my_instance, "SHOW GLOBAL VARIABLES LIKE 'sync_binlog'")
+        flc = self._get_var_or_status(my_instance, "SHOW GLOBAL VARIABLES LIKE 'innodb_flush_log_at_trx_commit'")
+        bl_fmt = self._get_var_str(my_instance, "SHOW GLOBAL VARIABLES LIKE 'binlog_format'")
+        log_bin = self._get_var_str(my_instance, "SHOW GLOBAL VARIABLES LIKE 'log_bin'")
+        gtid = None if _is_mariadb else self._get_var_str(my_instance, "SHOW GLOBAL VARIABLES LIKE 'gtid_mode'")
+        if sync_b is None or flc is None:
+            unknown('sync_binlog 或 innodb_flush_log_at_trx_commit 查询失败、不支持或权限不足')
+        else:
+            info('sync_binlog=%s, innodb_flush_log_at_trx_commit=%s' % (sync_b, flc))
+            if sync_b == 1 and flc == 1:
+                ok('双 1 组合, ACID 安全 (每次事务都 fsync, 性能略低)')
+            elif sync_b == 0 and flc == 2:
+                warn('sync_binlog=0 + innodb_flush_log_at_trx_commit=2, 崩溃时可能丢最后 ~1s 的事务')
+                warn('单机开发环境可接受, 生产建议至少 innodb_flush_log_at_trx_commit=1 或 sync_binlog=1')
+            else:
+                info('请按业务可接受的数据丢失窗口调整 sync_binlog / innodb_flush_log_at_trx_commit')
+
+        if bl_fmt is None:
+            unknown('binlog_format 查询失败、不支持或权限不足')
+        else:
+            info('binlog_format=%s' % bl_fmt)
+        if log_bin is None:
+            unknown('log_bin 查询失败、不支持或权限不足')
+        else:
+            info('log_bin=%s' % log_bin)
+            if log_bin.lower() != 'on':
+                warn('log_bin 未开启, 无法做 point-in-time recovery / 主从 / binlog 审计')
+                warn('my.cnf: log_bin=mysql-bin, binlog_format=ROW')
+            elif bl_fmt is not None and bl_fmt.upper() == 'STATEMENT':
+                warn('binlog_format=STATEMENT, 非确定性函数 (NOW/RAND/LIMIT) 可能导致主从不一致')
+                warn('my.cnf: binlog_format=ROW (或 MIXED)')
+        if _is_mariadb:
+            gtid_pos = self._get_var_str(my_instance, "SHOW GLOBAL VARIABLES LIKE 'gtid_current_pos'")
+            gtid_strict = self._get_var_str(my_instance, "SHOW GLOBAL VARIABLES LIKE 'gtid_strict_mode'")
+            if gtid_pos is None:
+                unknown('MariaDB gtid_current_pos 查询失败、不支持或权限不足')
+            else:
+                info('gtid_current_pos=%s' % (gtid_pos or '<empty>'))
+            if gtid_strict is None:
+                unknown('MariaDB gtid_strict_mode 查询失败、不支持或权限不足')
+            else:
+                info('gtid_strict_mode=%s' % gtid_strict)
+                if gtid_strict.lower() == 'on':
+                    ok('MariaDB GTID 严格模式已开启')
+                else:
+                    info('MariaDB GTID 严格模式未开启, 可按复制一致性要求评估 gtid_strict_mode')
+        elif gtid is None:
+            unknown('gtid_mode 查询失败、不支持或权限不足')
+        else:
+            info('gtid_mode=%s' % gtid)
+            if gtid.lower() == 'off':
+                warn('gtid_mode=OFF, 主从切换 / 重建副本操作较繁琐, 建议开启 GTID')
+                warn('my.cnf: gtid_mode=ON, enforce_gtid_consistency=ON')
+        # MariaDB 从 10.6 起使用秒级参数；必须按 (major, minor) 比较以兼容 11.x。
+        if not _version_known:
+            unknown('版本未知, 无法确定 binlog 过期参数')
+        elif log_bin is not None and log_bin.lower() != 'on':
+            info('binlog 未开启, 过期策略暂不生效')
+        else:
+            use_seconds = (_major >= 8 and not _is_mariadb) or (_is_mariadb and (_major, _minor) >= (10, 6))
+            if use_seconds:
+                bex = self._get_var_str(my_instance, "SHOW GLOBAL VARIABLES LIKE 'binlog_expire_logs_seconds'")
+                if bex is None:
+                    unknown('binlog_expire_logs_seconds 查询失败、不支持或权限不足')
+                else:
+                    info('binlog_expire_logs_seconds=%s' % bex)
+                    if bex in ('0', ''):
+                        warn('binlog 未设置过期策略 (binlog_expire_logs_seconds=%s), 长期运行会撑满磁盘' % bex)
+                        warn('my.cnf: binlog_expire_logs_seconds=604800 (保留 7 天)')
+                    else:
+                        ok('binlog 过期策略: binlog_expire_logs_seconds=%s' % bex)
+            else:
+                eld = self._get_var_or_status(my_instance, "SHOW GLOBAL VARIABLES LIKE 'expire_logs_days'")
+                if eld is None:
+                    unknown('expire_logs_days 查询失败、不支持或权限不足')
+                else:
+                    info('expire_logs_days=%s' % eld)
+                    if eld == 0:
+                        warn('binlog 永不过期 (expire_logs_days=0), 长期运行会撑满磁盘')
+                        warn('my.cnf: expire_logs_days=7 (保留 7 天)')
+                    else:
+                        ok('binlog 过期策略: expire_logs_days=%s' % eld)
+
+        # ---------- 3. 慢查询 ----------
+        section('慢查询 / SQL 健康')
+        slow_total = self._get_var_or_status(my_instance, "SHOW GLOBAL STATUS LIKE 'Slow_queries'")
+        sql_log = self._get_var_str(my_instance, "SHOW GLOBAL VARIABLES LIKE 'slow_query_log'")
+        lqt = self._get_var_or_status(my_instance, "SHOW GLOBAL VARIABLES LIKE 'long_query_time'")
+        if slow_total is None:
+            unknown('Slow_queries 查询失败、不支持或权限不足')
+        else:
+            slow_sample = self._sample_health_counter(sid, 'Slow_queries', slow_total)
+            counter_info('Slow_queries ', slow_sample)
+            if slow_sample['state'] == 'normal':
+                if slow_sample['delta'] > 0:
+                    warn('采样间隔新增 %s 条慢查询, 请结合慢日志定位 SQL' % slow_sample['delta'])
+                else:
+                    ok('采样间隔无新增慢查询')
+        if lqt is None:
+            unknown('long_query_time 查询失败、不支持或权限不足')
+        else:
+            info('long_query_time=%.1fs' % lqt)
+        if sql_log is None:
+            unknown('slow_query_log 查询失败、不支持或权限不足')
+        else:
+            info('slow_query_log=%s' % sql_log)
+            if sql_log.lower() == 'on':
+                if lqt is not None and lqt <= 2:
+                    ok('慢查询已开启且阈值合理 (%.1fs)' % lqt)
+                elif lqt is not None:
+                    warn('慢查询已开启但 long_query_time=%.1fs 偏高, 建议调低到 1~2s' % lqt)
+                    warn('my.cnf: long_query_time=2, slow_query_log=1')
+            else:
+                warn('slow_query_log 未开启, 无法定位慢 SQL')
+                warn('my.cnf: slow_query_log=1, long_query_time=2, log_queries_not_using_indexes=1')
+
+        # 表级 SQL 健康: 冗余索引
+        try:
+            red = my_instance.query(
+                "select table_schema,table_name,redundant_index_name,sql_drop_index "
+                "from sys.schema_redundant_indexes limit 50"
+            )
+            if red is None:
+                unknown('冗余索引检查返回失败')
+            elif red:
+                red_total = len(red)
+                if red_total >= 50:
+                    count_rows = my_instance.query("SELECT COUNT(*) AS total FROM sys.schema_redundant_indexes")
+                    red_total = int(count_rows[0]['total'])
+                warn('发现 %d 组冗余索引 (最多展示 3 组样本):' % red_total)
+                for r in red[:3]:
+                    warn('  %s.%s → %s' % (r['table_schema'], r['table_name'], r['redundant_index_name']))
+                    warn('  核实依赖和执行窗口后可执行: %s' % r['sql_drop_index'])
+            else:
+                ok('未发现冗余索引')
+        except Exception as ex:
+            unknown('冗余索引检查失败、sys schema 不支持或权限不足: %s' % str(ex))
+
+        # 未使用索引 (performance_schema 必须开启, sys.schema_unused_indexes 才有数据)
+        if pfs is None:
+            unknown('performance_schema 状态未知, 无法检测未使用索引')
+        elif not pfs:
+            unknown('performance_schema 未开启, 无法检测未使用索引')
+        else:
+            try:
+                unused = my_instance.query(
+                    "SELECT object_schema, object_name, index_name "
+                    "FROM sys.schema_unused_indexes LIMIT 50"
+                )
+                if unused is None:
+                    unknown('未使用索引检查返回失败')
+                elif unused:
+                    unused_total = len(unused)
+                    if unused_total >= 50:
+                        count_rows = my_instance.query("SELECT COUNT(*) AS total FROM sys.schema_unused_indexes")
+                        unused_total = int(count_rows[0]['total'])
+                    warn('发现 %d 个从未被查询命中的索引 (最多展示 3 个样本):' % unused_total)
+                    for r in unused[:3]:
+                        warn('  %s.%s → %s (核实业务周期后再考虑 DROP)' % (
+                            r['object_schema'], r['object_name'], r['index_name']))
+                else:
+                    ok('当前采集范围内未发现未使用索引')
+            except Exception as ex:
+                unknown('未使用索引检查失败、sys schema 不支持或权限不足: %s' % str(ex))
+
+        # 无主键表
+        try:
+            nopk = my_instance.query(
+                "SELECT t.table_schema AS table_schema, t.table_name AS table_name FROM information_schema.tables t "
+                "LEFT JOIN information_schema.key_column_usage k "
+                "ON t.table_schema=k.table_schema AND t.table_name=k.table_name AND k.constraint_name='PRIMARY' "
+                "WHERE t.table_schema NOT IN ('mysql','information_schema','sys','performance_schema') "
+                "AND k.constraint_name IS NULL AND t.table_type='BASE TABLE'"
+            )
+            if nopk is None:
+                unknown('无主键表检查返回失败')
+            elif nopk:
+                critical('发现 %d 张无主键表 (会导致全表扫描 + Replication 无法高效定位行)' % len(nopk))
+                for r in nopk[:5]:
+                    critical('  %s.%s' % (r['table_schema'], r['table_name']))
+            else:
+                ok('所有业务表都有主键')
+        except Exception as ex:
+            unknown('无主键表检查失败或权限不足: %s' % str(ex))
+
+        # ---------- 4. 磁盘 / Tmp 表 ----------
+        section('磁盘与 Tmp 表')
+        ctd = self._get_var_or_status(my_instance, "SHOW GLOBAL STATUS LIKE 'Created_tmp_disk_tables'")
+        ctm = self._get_var_or_status(my_instance, "SHOW GLOBAL STATUS LIKE 'Created_tmp_tables'")
+        if ctd is None or ctm is None:
+            unknown('Tmp 表计数查询失败、不支持或权限不足')
+        else:
+            ctd_sample = self._sample_health_counter(sid, 'Created_tmp_disk_tables', ctd)
+            ctm_sample = self._sample_health_counter(sid, 'Created_tmp_tables', ctm)
+            counter_info('Created_tmp_disk_tables ', ctd_sample)
+            counter_info('Created_tmp_tables ', ctm_sample)
+            if ctd_sample['state'] == 'normal' and ctm_sample['state'] == 'normal':
+                if ctm_sample['delta'] > 0:
+                    ctd_pct = ctd_sample['delta'] / ctm_sample['delta'] * 100
+                    info('采样间隔临时表落盘比例: %.2f%%' % ctd_pct)
+                    if ctd_pct >= 20:
+                        warn('采样间隔有 %.1f%% 的临时表落盘, 排序/分组查询性能会差' % ctd_pct)
+                        warn('建议结合工作负载评估 tmp_table_size / max_heap_table_size, 避免盲目调大内存')
+                    else:
+                        ok('采样间隔 Tmp 表落盘比例正常 (%.2f%%)' % ctd_pct)
+                else:
+                    info('采样间隔无新增临时表, 暂不评估落盘比例')
+
+        bcd = self._get_var_or_status(my_instance, "SHOW GLOBAL STATUS LIKE 'Binlog_cache_disk_use'")
+        bcu = self._get_var_or_status(my_instance, "SHOW GLOBAL STATUS LIKE 'Binlog_cache_use'")
+        if bcd is None or bcu is None:
+            unknown('Binlog 缓存计数查询失败、不支持或权限不足')
+        else:
+            bcd_sample = self._sample_health_counter(sid, 'Binlog_cache_disk_use', bcd)
+            bcu_sample = self._sample_health_counter(sid, 'Binlog_cache_use', bcu)
+            counter_info('Binlog_cache_disk_use ', bcd_sample)
+            counter_info('Binlog_cache_use ', bcu_sample)
+            if bcd_sample['state'] == 'normal' and bcu_sample['state'] == 'normal':
+                if bcu_sample['delta'] > 0:
+                    bcd_pct = bcd_sample['delta'] / bcu_sample['delta'] * 100
+                    info('采样间隔 Binlog 缓存落盘比例: %.2f%%' % bcd_pct)
+                    if bcd_pct >= 10:
+                        warn('采样间隔 Binlog 缓存落盘比例 %.1f%% 偏高, 较大事务会写磁盘' % bcd_pct)
+                        warn('建议结合事务大小评估 binlog_cache_size, 避免按累计值盲目调整')
+                    else:
+                        ok('采样间隔 Binlog 缓存落盘比例正常')
+                else:
+                    info('采样间隔无 Binlog 缓存事务压力')
+
+        # ---------- 4.5 InnoDB Redo / Undo 空间 ----------
+        section('InnoDB Redo / Undo')
+        # Redo Log 容量 (MySQL 8.0.30+)，系统变量可回退替代不存在的 performance_schema 表。
+        if not _version_known:
+            unknown('版本未知, 无法确定 Redo Log 检查方式')
+        elif (_major, _minor, _patch) >= (8, 0, 30) and not _is_mariadb:
+            redo = None
+            redo_error = None
+            try:
+                redo = my_instance.query(
+                    "SELECT name AS name, n_files AS n_files, capacity AS capacity FROM performance_schema.innodb_redo_log "
+                    "WHERE name IN ('CURRENT','PREVIOUS') LIMIT 1"
+                )
+            except Exception as ex:
+                redo_error = ex
+            cap_bytes = None
+            if redo:
+                try:
+                    cap_bytes = int(redo[0]['capacity'])
+                except (KeyError, TypeError, ValueError) as ex:
+                    redo_error = ex
+            redo_source = 'performance_schema.innodb_redo_log'
+            if cap_bytes is None:
+                cap_bytes = self._get_var_or_status(
+                    my_instance, "SHOW GLOBAL VARIABLES LIKE 'innodb_redo_log_capacity'")
+                redo_source = 'innodb_redo_log_capacity'
+            if cap_bytes is not None:
+                cap_mb = cap_bytes / 1024 / 1024
+                info('Redo Log 总容量: %.0fMB (%s)' % (cap_mb, redo_source))
+                if cap_mb < 512:
+                    tip('Redo Log 仅 %.0fMB, 高写入事务可能出现 checkpoint 瓶颈' % cap_mb)
+                    tip('my.cnf: innodb_redo_log_capacity=2G (MySQL 8.0.30+)')
+            else:
+                unknown('Redo Log 容量不可用: performance_schema 查询=%s; innodb_redo_log_capacity 不可用' % (
+                    str(redo_error) if redo_error else '无结果'))
+        elif ilw_sample is None:
+            unknown('当前版本通过 Innodb_log_waits 观察 Redo, 但该指标不可用')
+        else:
+            info('当前版本通过上述 Innodb_log_waits 的采样间隔增量观察 Redo 压力')
+
+        # Undo 历史链优先读状态变量；MySQL 各版本通常使用 trx_rseg_history_len。
+        undo_hist = self._get_var_or_status(my_instance, "SHOW GLOBAL STATUS LIKE 'Innodb_history_list_length'")
+        undo_source = 'Innodb_history_list_length'
+        undo_metric_status = None
+        if undo_hist is None:
+            undo_source = 'INNODB_METRICS.trx_rseg_history_len'
+            undo_hist, undo_metric_status = self._get_innodb_metric(my_instance, 'trx_rseg_history_len')
+        if undo_hist is None:
+            unknown('Undo 历史链不可用 (trx_rseg_history_len: %s)' % undo_metric_status)
+        else:
+            info('%s=%s (Undo 历史链长度)' % (undo_source, undo_hist))
+            if undo_hist > 10000:
+                warn('Undo 历史链很长 (%s), 可能有慢查询/大事务没提交, Undo 表空间膨胀' % undo_hist)
+                warn('排查: SHOW FULL PROCESSLIST 找长时间运行的查询, 缩短事务')
+            else:
+                ok('Undo 历史链长度正常')
+
+        # ---------- 4.6 表碎片化 ----------
+        section('表碎片化 (Fragmentation)')
+        try:
+            frag = my_instance.query(
+                """SELECT table_schema AS table_schema, table_name AS table_name,
+                          ROUND(data_length/1024/1024, 2) AS data_mb,
+                          ROUND(data_free/1024/1024, 2) AS free_mb,
+                          ROUND(data_free*100/NULLIF(data_length+index_length,0), 1) AS frag_pct
+                   FROM information_schema.tables
+                   WHERE table_schema NOT IN ('mysql','information_schema','performance_schema','sys')
+                     AND table_type = 'BASE TABLE'
+                     AND data_length + data_free > 10*1024*1024
+                     AND data_free > 10*1024*1024
+                ORDER BY data_free DESC LIMIT 10"""
+            )
+            if frag is None:
+                unknown('表碎片检查返回失败')
+            elif frag:
+                warn('发现至少 %d 张 ≥10MB 且 ≥10MB 碎片的表 (最多显示 10 张, 取前 5):' % len(frag))
+                for r in frag[:5]:
+                    warn('  %s.%s  data=%.1fMB free=%.1fMB 碎片率 %.1f%%' % (
+                        r['table_schema'], r['table_name'],
+                        r['data_mb'], r['free_mb'], r['frag_pct'] or 0))
+                    info('  可评估低峰执行: OPTIMIZE TABLE `%s`.`%s`;' % (r['table_schema'], r['table_name']))
+                tip('OPTIMIZE TABLE 仅在确认碎片确需回收且业务低峰时执行; 可能锁表/阻塞写入、产生高 IO、占用额外磁盘, 主从环境还可能造成复制延迟')
+                if len(frag) >= 10:
+                    unknown('表碎片检查达到 LIMIT 10, 扫描结果不完整')
+            else:
+                ok('业务表无明显碎片化 (>10MB 碎片)')
+        except Exception as ex:
+            unknown('表碎片检查失败或权限不足: %s' % str(ex))
+
+        # ---------- 5. 大表 / AUTO_INCREMENT 余量 ----------
+        section('大表 / AUTO_INCREMENT 余量')
+        # 大表仅作为容量排查信息；LIMIT 500 的结果不完整时不下“无大表”结论。
+        try:
+            big_tables = my_instance.query(
+                """SELECT t.table_schema AS table_schema, t.table_name AS table_name, t.table_rows AS table_rows,
+                          ROUND((t.data_length + t.index_length)/1024/1024, 2) AS total_mb
+                   FROM information_schema.tables t
+                   WHERE t.table_schema NOT IN ('mysql','information_schema','performance_schema','sys')
+                     AND t.table_type = 'BASE TABLE'
+                     AND (t.data_length + t.index_length) >= 100*1024*1024
+                   ORDER BY t.data_length + t.index_length DESC
+                   LIMIT 500"""
+            )
+            if big_tables is None:
+                unknown('大表检查返回失败')
+            else:
+                big = [r for r in big_tables if r.get('total_mb') is not None and r['total_mb'] >= 100]
+                has_unknown_size = any(r.get('total_mb') is None for r in big_tables)
+                is_complete = len(big_tables) < 500 and not has_unknown_size
+                if big:
+                    info('在已返回结果中发现 %d 张 ≥100MB 的大表 (最大 %.1fMB, 仅作排查信息):' % (
+                        len(big), max(x['total_mb'] for x in big)))
+                    for r in big[:3]:
+                        info('  %s.%s  [%.1fMB, rows=%s]' % (
+                            r['table_schema'], r['table_name'], r['total_mb'],
+                            r['table_rows'] if r.get('table_rows') is not None else '-'))
+                    info('建议评估容量增长、索引、归档/分区和变更窗口; OPTIMIZE TABLE 仅在确需回收碎片且低峰时执行, 注意锁表、高 IO、额外磁盘和复制延迟风险')
+                    if not is_complete:
+                        unknown('大表查询达到 LIMIT 500 或存在未知表大小, 结果不完整')
+                elif is_complete:
+                    ok('业务表都 <100MB, 无需要重点关注的大表')
+                else:
+                    unknown('大表查询达到 LIMIT 500 或存在未知表大小, 无法得出无大表结论')
+        except Exception as ex:
+            unknown('大表检查失败或权限不足: %s' % str(ex))
+
+        # AUTO_INCREMENT 独立查询全部业务自增列，不受大表查询及其 LIMIT 影响。
+        type_max = {
+            'tinyint':    (127, 255),
+            'smallint':   (32767, 65535),
+            'mediumint':  (8388607, 16777215),
+            'int':        (2147483647, 4294967295),
+            'integer':    (2147483647, 4294967295),
+            'bigint':     (9223372036854775807, 18446744073709551615),
+        }
+        try:
+            auto_columns = my_instance.query(
+                """SELECT c.table_schema AS table_schema, c.table_name AS table_name,
+                          c.column_name AS column_name, c.data_type AS data_type,
+                          c.column_type AS column_type, LOCATE('unsigned', c.column_type) > 0 AS is_unsigned,
+                          t.auto_increment AS auto_increment
+                   FROM information_schema.columns c
+                   JOIN information_schema.tables t
+                     ON c.table_schema=t.table_schema AND c.table_name=t.table_name
+                   WHERE c.table_schema NOT IN ('mysql','information_schema','performance_schema','sys')
+                     AND t.table_type = 'BASE TABLE' AND c.extra='auto_increment'"""
+            )
+            if auto_columns is None:
+                unknown('AUTO_INCREMENT 独立查询返回失败')
+            elif not auto_columns:
+                ok('业务表无 AUTO_INCREMENT 列')
+            else:
+                ai_risks = []
+                ai_errors = []
+                for r in auto_columns:
+                    if not all(r.get(k) is not None for k in ('table_schema', 'table_name', 'column_name')):
+                        ai_errors.append('自增元数据缺少表名或列名')
+                        continue
+                    label = '%s.%s.%s' % (r['table_schema'], r['table_name'], r['column_name'])
+                    if r.get('auto_increment') is None:
+                        ai_errors.append('%s 的 AUTO_INCREMENT 当前值未知' % label)
+                        continue
+                    dt = (r.get('data_type') or '').lower()
+                    lim = type_max.get(dt)
+                    if lim is None:
+                        ai_errors.append('%s 的自增类型 %s 无法确定上下限' % (label, dt or 'unknown'))
+                        continue
+                    try:
+                        ai = int(r['auto_increment'])
+                    except (ValueError, TypeError):
+                        ai_errors.append('%s 的 AUTO_INCREMENT 值无法解析: %s' % (label, r.get('auto_increment')))
+                        continue
+                    is_unsigned = str(r.get('is_unsigned', '0')).lower() in ('1', 'true')
+                    mx = lim[1] if is_unsigned else lim[0]
+                    pct_used = ai / mx * 100
+                    if pct_used >= 50:
+                        ai_risks.append((pct_used, r, mx))
+                if ai_errors:
+                    unknown('%d 个 AUTO_INCREMENT 列无法完整评估 (首个: %s)' % (len(ai_errors), ai_errors[0]))
+                if ai_risks:
+                    ai_risks.sort(key=lambda x: x[0], reverse=True)
+                    warn('发现 %d 个 AUTO_INCREMENT 列已用 ≥50%%, 有耗尽风险 (取前 3 个):' % len(ai_risks))
+                    for pct, r, mx in ai_risks[:3]:
+                        warn('  %s.%s.%s 当前 %s / max %s (%.1f%%)' % (
+                            r['table_schema'], r['table_name'], r['column_name'],
+                            r['auto_increment'], mx, pct))
+                elif not ai_errors:
+                    ok('全部 AUTO_INCREMENT 列余量都在 50% 以上, 无耗尽风险')
+        except Exception as ex:
+            unknown('AUTO_INCREMENT 独立查询失败或权限不足: %s' % str(ex))
+
+        # ---------- 6. 账户安全 ----------
+        section('账户安全')
+        try:
+            users = my_instance.query("SELECT User AS user, Host AS host FROM mysql.user")
+            if users is None:
+                unknown('账户安全查询返回失败或权限不足')
+            else:
+                root_remote = [u for u in users if u['user'] == 'root' and u['host'] not in ('localhost', '127.0.0.1', '::1')]
+                anonymous = [u for u in users if u['user'] == '']
+                system_users = ('mysql.session', 'mysql.sys', 'root', 'localhost')
+                weak_host_users = [u for u in users if u['host'] == '%' and u['user'] not in system_users]
+                if root_remote:
+                    critical('root 账号允许远程登录: %s (远程暴露面和爆破风险增加)' % ', '.join(u['host'] for u in root_remote))
+                    critical('请核验 bind-address、OS/云防火墙与安全组、实际网络暴露面和现有业务依赖; 按最小权限使用专用账号并限制来源, 不要直接删除账号')
+                else:
+                    ok('root 账号仅限本机登录')
+                if anonymous:
+                    warn('存在匿名账号 user="", 请核实依赖后删除或限制')
+                else:
+                    ok('无匿名账号')
+                if weak_host_users:
+                    info('以下账号 host="%%" (允许任意来源, 请核验暴露面和最小权限):')
+                    for u in weak_host_users[:5]:
+                        info('  user=%s host=%%' % u['user'])
+        except Exception as ex:
+            unknown('账户安全检查失败或权限不足: %s' % str(ex))
+
+        # ---------- 7. 主从 ----------
+        section('主从复制')
+        try:
+            slave_data = None
+            replication_query_failed = False
+            try:
+                slave_data = my_instance.query('SHOW REPLICA STATUS')
+            except Exception as replica_ex:
+                try:
+                    slave_data = my_instance.query('SHOW SLAVE STATUS')
+                except Exception as slave_ex:
+                    replication_query_failed = True
+                    unknown('主从状态查询失败、不支持或权限不足: REPLICA=%s; SLAVE=%s' % (
+                        str(replica_ex), str(slave_ex)))
+            if replication_query_failed:
+                pass
+            elif slave_data is None:
+                unknown('主从状态查询返回失败')
+            elif slave_data:
+                s = slave_data[0]
+                io_running = s.get('Replica_IO_Running', s.get('Slave_IO_Running'))
+                sql_running = s.get('Replica_SQL_Running', s.get('Slave_SQL_Running'))
+                sec_behind = s.get('Seconds_Behind_Source', s.get('Seconds_Behind_Master'))
+                if io_running == 'Yes' and sql_running == 'Yes':
+                    info('主从复制 IO/SQL 线程运行正常')
+                    if sec_behind is None:
+                        unknown('复制延迟未知 (Seconds_Behind 为 NULL), 不能判定无延迟')
+                    elif sec_behind == 0:
+                        ok('主从复制正常, 无延迟')
+                    else:
+                        warn('主从复制线程正常但延迟 %s 秒' % sec_behind)
+                else:
+                    warn('主从异常! IO=%s, SQL=%s, Last_Error=%s' % (
+                        io_running, sql_running,
+                        s.get('Last_Error') or s.get('Last_IO_Error') or '无'))
+            else:
+                ok('当前实例不是从库, 未开启主从复制')
+        except Exception as ex:
+            unknown('主从状态解析失败: %s' % str(ex))
+
+        # ---------- 总结 ----------
+        lines.append('')
+        lines.append('━━━ 总结 ━━━')
+        n_critical = sum(1 for x in issues if x[0] == 2)
+        n_warn = sum(1 for x in issues if x[0] == 1)
+        n_tip = sum(1 for x in issues if x[0] == 0)
+        n_unknown = sum(1 for x in issues if x[0] == -1)
+        if not issues:
+            lines.append('  🎉 本次检查共发现 0 个可优化点, MySQL 健康状况良好!')
+        else:
+            lines.append('  📊 严重 🚨 %d 个 / 警告 ⚠️  %d 个 / 建议 💡 %d 个 / 未知 ❓ %d 个 (共 %d)' % (
+                n_critical, n_warn, n_tip, n_unknown, len(issues)))
+            if n_unknown > 0:
+                lines.append('  ❓ 存在 unknown 检查项, 结果不完整, 不能据此认定 MySQL 健康状况良好')
+            if n_critical > 0:
+                lines.append('')
+                lines.append('  ── 最严重问题 Top %d ──' % min(n_critical, 5))
+                for idx, (lv, sec, txt) in enumerate(
+                        sorted([x for x in issues if x[0] == 2], key=lambda x: x[1])):
+                    if idx >= 5: break
+                    # txt 本身已带 🚨 前缀, 这里显示所属 section
+                    lines.append('  %s  [%s]' % (txt, sec))
+            # 所有 issues 按 level 倒序打印完整清单 (追加在最后)
+            lines.append('')
+            lines.append('  ── 完整问题清单 (按严重度排序) ──')
+            for lv, sec, txt in sorted(issues, key=lambda x: (-x[0], x[1])):
+                lines.append('  %s  [%s]' % (txt, sec))
+        lines.append('')
+        lines.append('  ℹ️   my.cnf 修改后需重启 MySQL 或动态执行 SET GLOBAL, 具体参数请查阅官方文档')
+
+        return mw.returnData(True, 'ok', '\n'.join(lines))
 
 # ---------------------------------- run ----------------------------------
 
@@ -775,6 +1823,15 @@ def get_deadlock_info(args):
 def get_slave_status(args):
     t = nosqlMySQLCtr()
     return t.getSlaveStatus(args)
+
+def get_slave_runtime(args):
+    t = nosqlMySQLCtr()
+    return t.getSlaveRuntime(args)
+
+# MySQL 健康检查
+def get_health(args):
+    t = nosqlMySQLCtr()
+    return t.getHealth(args)
 
 
 

@@ -162,8 +162,7 @@ def initDReceive():
     systemService = systemDir + '/rsyncd.service'
     systemServiceTpl = getPluginDir() + '/init.d/rsyncd.service.tpl'
     if not os.path.exists(lock_file):
-
-        rsync_bin = mw.execShell('which rsync')[0].strip()
+        rsync_bin = mw.execShell('command -v rsync')[0].strip()
         if rsync_bin == '':
             print('rsync missing!')
             exit(0)
@@ -214,7 +213,7 @@ def initDSend():
     systemService = systemDir + '/lsyncd.service'
     systemServiceTpl = getPluginDir() + '/init.d/lsyncd.service.tpl'
     if not os.path.exists(lock_file):
-        lsyncd_bin = mw.execShell('which lsyncd')[0].strip()
+        lsyncd_bin = mw.execShell('command -v lsyncd')[0].strip()
         if lsyncd_bin == '':
             print('lsyncd missing!')
             exit(0)
@@ -483,7 +482,7 @@ def delRecBy(name):
         if is_end:
             reg = r'\[' + name + r'\]\s*(.*)'
         else:
-            reg = r'\\[' + name + r'\]\s*(.*)\s*\[' + next_name + r'\]'
+            reg = r'\[' + name + r'\]\s*(.*)\s*\[' + next_name + r'\]'
 
         conre = re.search(reg,  content, re.S)
         content = content.replace("[" + name + "]\n" + conre.groups()[0], '')
@@ -578,8 +577,7 @@ def makeLsyncdConf(data):
     content += "}\n\n"
 
     lsyncd_list = lsyncd_data['list']
-
-    rsync_bin = mw.execShell('which rsync')[0].strip()
+    rsync_bin = mw.execShell('command -v rsync')[0].strip()
     send_dir = getServerDir() + "/send"
 
     if len(lsyncd_list) > 0:

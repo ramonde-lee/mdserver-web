@@ -5,7 +5,22 @@ $(document).ready(function(){
     }
 });
 
-function redisPostCB(method, args, callback){
+function dataQueryRequest(request, loadT, errorCallback, completeCallback){
+    request.fail(function(xhr){
+        var msg = '网络请求失败, 请稍后重试';
+        if (xhr.responseJSON && xhr.responseJSON.msg) msg = xhr.responseJSON.msg;
+        layer.msg(msg, {icon: 0, time: 2000, shade: [0.3, '#000']});
+        if (typeof errorCallback === 'function') {
+            errorCallback({status: false, msg: msg, xhr: xhr});
+        }
+    }).always(function(){
+        if (loadT !== null && loadT !== undefined) layer.close(loadT);
+        if (typeof completeCallback === 'function') completeCallback();
+    });
+    return request;
+}
+
+function redisPostCB(method, args, callback, errorCallback, completeCallback){
     var loadT = layer.msg('正在获取...', { icon: 16, time: 0, shade: 0.3 });
 
     var req_data = {};
@@ -20,20 +35,21 @@ function redisPostCB(method, args, callback){
         req_data['args'] = JSON.stringify(args);
     }
 
-    $.post('/plugins/callback', req_data, function(data) {
-        layer.close(loadT);
+    var request = $.post('/plugins/callback', req_data, function(data) {
         if (!data.status){
             layer.msg(data.msg,{icon:0,time:2000,shade: [0.3, '#000']});
+            if (typeof errorCallback === 'function') errorCallback(data);
             return;
         }
 
         if(typeof(callback) == 'function'){
             callback(data);
         }
-    },'json'); 
+    },'json');
+    return dataQueryRequest(request, loadT, errorCallback, completeCallback);
 }
 
-function mgdbPostCB(method, args, callback){
+function mgdbPostCB(method, args, callback, errorCallback, completeCallback){
     var loadT = layer.msg('正在获取...', { icon: 16, time: 0, shade: 0.3 });
 
     var req_data = {};
@@ -48,17 +64,18 @@ function mgdbPostCB(method, args, callback){
         req_data['args'] = JSON.stringify(args);
     }
 
-    $.post('/plugins/callback', req_data, function(data) {
-        layer.close(loadT);
+    var request = $.post('/plugins/callback', req_data, function(data) {
         if (!data.status){
             layer.msg(data.msg,{icon:0,time:2000,shade: [0.3, '#000']});
+            if (typeof errorCallback === 'function') errorCallback(data);
             return;
         }
 
         if(typeof(callback) == 'function'){
             callback(data);
         }
-    },'json'); 
+    },'json');
+    return dataQueryRequest(request, loadT, errorCallback, completeCallback);
 }
 
 function memPostCB(method, args, callback){
@@ -118,7 +135,7 @@ function myPostCB(method, args, callback){
 }
 
 
-function myPostCBN(method, args, callback){
+function myPostCBN(method, args, callback, errorCallback, completeCallback){
     var req_data = {};
     req_data['name'] = 'data_query';
     req_data['func'] = method;
@@ -131,7 +148,37 @@ function myPostCBN(method, args, callback){
         req_data['args'] = JSON.stringify(args);
     }
 
+    var request = $.post('/plugins/callback', req_data, function(data) {
+        if (!data.status){
+            layer.msg(data.msg,{icon:0,time:2000,shade: [0.3, '#000']});
+            if (typeof errorCallback === 'function') errorCallback(data);
+            return;
+        }
+
+        if(typeof(callback) == 'function'){
+            callback(data);
+        }
+    },'json');
+    return dataQueryRequest(request, null, errorCallback, completeCallback);
+}
+
+function pgPostCB(method, args, callback){
+    var loadT = layer.msg('正在获取...', { icon: 16, time: 0, shade: 0.3 });
+
+    var req_data = {};
+    req_data['name'] = 'data_query';
+    req_data['func'] = method;
+    req_data['script']='sql_postgresql';
+    args['version'] = '';
+ 
+    if (typeof(args) == 'string' && args == ''){
+        req_data['args'] = JSON.stringify(toArrayObject(args));
+    } else {
+        req_data['args'] = JSON.stringify(args);
+    }
+
     $.post('/plugins/callback', req_data, function(data) {
+        layer.close(loadT);
         if (!data.status){
             layer.msg(data.msg,{icon:0,time:2000,shade: [0.3, '#000']});
             return;
@@ -141,6 +188,34 @@ function myPostCBN(method, args, callback){
             callback(data);
         }
     },'json'); 
+}
+
+
+function pgPostCBN(method, args, callback, errorCallback, completeCallback){
+    var req_data = {};
+    req_data['name'] = 'data_query';
+    req_data['func'] = method;
+    req_data['script']='sql_postgresql';
+    args['version'] = '';
+ 
+    if (typeof(args) == 'string' && args == ''){
+        req_data['args'] = JSON.stringify(toArrayObject(args));
+    } else {
+        req_data['args'] = JSON.stringify(args);
+    }
+
+    var request = $.post('/plugins/callback', req_data, function(data) {
+        if (!data.status){
+            layer.msg(data.msg,{icon:0,time:2000,shade: [0.3, '#000']});
+            if (typeof errorCallback === 'function') errorCallback(data);
+            return;
+        }
+
+        if(typeof(callback) == 'function'){
+            callback(data);
+        }
+    },'json');
+    return dataQueryRequest(request, null, errorCallback, completeCallback);
 }
 
 
@@ -163,6 +238,7 @@ function initTabFunc(tab){
         case 'mongodb':initTabMongodb();break;
         case 'memcached':initTabMemcached();break;
         case 'mysql':initTabMySQL();break;
+        case 'postgresql':initTabPostgresql();break;
         case 'default:':initTabRedis();break;
     }
 }
@@ -218,6 +294,7 @@ function initTabRedis(){
         redisBatchClear();
     });
 
+    redisCommonFunc();
     readerTableChecked();
 }
 
@@ -237,7 +314,7 @@ function initTabMemcached(){
     $('#memcached_clear_all').unbind('click').click(function(){
         var sid = memcachedGetSid();
         memPostCB('clear',{'sid':sid} ,function(rdata){
-            // console.log(rdata);
+            console.log("xxx",rdata);
             showMsg(rdata.data.msg,function(){
                 if (rdata.data.status){
                     memcachedGetList();
@@ -815,12 +892,309 @@ function mysqlCommonFuncSlaveStatus(){
     });
 }
 
+var dataQueryHealthRequests = {};
+
+function dataQueryHealthPayload(rdata){
+    var payload = rdata;
+    for (var depth = 0; depth < 4; depth++) {
+        if (typeof payload === 'string') {
+            return payload.trim() ? {ok: true, text: payload} : {ok: false, msg: '健康检查未返回报告'};
+        }
+        if (!payload || typeof payload !== 'object') {
+            return {ok: false, msg: '健康检查返回格式无法识别'};
+        }
+        if (payload.status === false) {
+            return {ok: false, msg: payload.msg || '健康检查失败'};
+        }
+        if (Object.prototype.hasOwnProperty.call(payload, 'data')) {
+            payload = payload.data;
+            continue;
+        }
+        return {ok: false, msg: payload.msg || '健康检查未返回报告'};
+    }
+    return {ok: false, msg: '健康检查返回层级异常'};
+}
+
+function dataQueryShowHealth(type, title, postFn, args){
+    var state = dataQueryHealthRequests[type] || {loading: false, token: 0, layer: null};
+    dataQueryHealthRequests[type] = state;
+    if (state.loading) {
+        layer.msg('健康指标正在采集中, 请勿重复点击', {icon: 0, time: 1500});
+        return;
+    }
+
+    state.loading = true;
+    state.token += 1;
+    var token = state.token;
+    var boxId = 'data_query_health_' + type;
+    var layerIndex = layer.open({
+        type: 1,
+        title: title,
+        area: ['780px', '600px'],
+        closeBtn: 1,
+        shadeClose: false,
+        content: '<div class="bt-form pd15">' +
+            '<div style="margin-bottom:8px;color:#999;font-size:12px;">✅ 正常  ⚠️ 警告  🚨 严重  💡 建议  ❓ 未知  ℹ️ 信息</div>' +
+            '<textarea readonly style="margin:0;height:500px;width:100%;background:#1e1e1e;color:#d4d4d4;padding:8px;font-family:Menlo,Consolas,monospace;font-size:12px;line-height:18px;resize:none;" id="' + boxId + '">正在采集指标, 请稍候...</textarea>' +
+            '</div>',
+        end: function(){
+            if (state.layer === layerIndex && state.token === token) {
+                state.token += 1;
+                state.loading = false;
+                state.layer = null;
+            }
+        }
+    });
+    state.layer = layerIndex;
+
+    function update(text, isError){
+        if (state.token !== token || state.layer !== layerIndex) return;
+        var $box = $('#' + boxId);
+        if (!$box.length) return;
+        $box.val(isError ? '健康检查失败: ' + text : text);
+        var summaryAt = isError ? -1 : text.indexOf('━━━ 总结');
+        if (summaryAt >= 0) {
+            var summaryLine = text.substring(0, summaryAt).split('\n').length;
+            var lineHeight = parseFloat($box.css('line-height')) || 18;
+            $box.scrollTop(Math.max(0, (summaryLine - 4) * lineHeight));
+        } else {
+            $box.scrollTop(0);
+        }
+    }
+
+    postFn('get_health', args, function(rdata){
+        var result = dataQueryHealthPayload(rdata);
+        update(result.ok ? result.text : result.msg, !result.ok);
+    }, function(error){
+        update((error && error.msg) || '请求失败', true);
+    }, function(){
+        if (state.token === token) state.loading = false;
+    });
+}
+
+function mysqlCommonFuncHealth(){
+    dataQueryShowHealth('mysql', 'MySQL 综合健康检查与优化建议', myPostCBN, {'sid': mysqlGetSid()});
+}
+
+function mysqlSlaveSyncProgress(){
+    var html = '<div>';
+    html += '<div class="slave_sync_progress" id="slave_sync_progress" style="width:750px;height:350px;"></div>';
+    html += '<hr/><div class="slave_sync_info"></div>';
+    html += '</div>';
+    var timer = null;
+    var statEc = null;
+    layer.open({
+        type: 1,
+        title: "查看从库延迟进度",
+        area: ['800px', '500px'],
+        closeBtn: 1,
+        shadeClose: false,
+        content:'<div class="bt-form pd20">' + html + '</div>',
+        success:function(i,l){
+            // console.log(i,l);
+            statEc = echarts.init(document.getElementById('slave_sync_progress'));
+
+            var chat = {};
+            chat['tooltip'] = {
+                show:true,
+                trigger: 'axis',
+                backgroundColor: 'rgba(255,255,255,0.8)',
+                axisPointer: { 
+                    type: 'line',
+                    lineStyle: { color: 'rgba(150,150,150,0.2)'}
+                },
+                textStyle: {
+                    color: '#666',
+                    fontSize: '14px',
+                },
+            }
+
+            var legend_name = ["延迟时间", "回放延迟", "GTID差值"];
+            var option = {
+                title: { text: '延迟进度观察', left: 'center', textStyle: { fontSize: 16 } },
+                tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
+                backgroundColor:'#fff',
+                legend:{
+                    data:legend_name,
+                    top:30,
+                },
+                xAxis: { type: 'category', boundaryGap: false, data: [],},
+                yAxis: [
+                  { type: 'value', name: legend_name[0], position: 'left'},
+                  { type: 'value', name: legend_name[1], position: 'right'},
+                ],
+                series: [
+                    {
+                        name:legend_name[0],
+                        yAxisIndex: 0,
+                        data: [],
+                        type: 'line',
+                        smooth: true,
+                        showSymbol: false,
+                    },
+                    {
+                        name:legend_name[1],
+                        yAxisIndex: 0,
+                        data: [],
+                        type: 'line',
+                        smooth: true,
+                        showSymbol: false,
+                    },
+                    {
+                        name:legend_name[2],
+                        yAxisIndex: 1,
+                        data: [],
+                        type: 'bar',
+                        smooth: true,
+                        showSymbol: false,
+                    },
+                ]
+            };
+            var xData = [];
+            var yData = [];
+            var pdData = [];
+            var gtidData = [];
+            statEc.setOption(option);
+
+            timer = setInterval(function(){
+                var sid = mysqlGetSid();
+                myPostCBN('get_slave_runtime',{'sid':sid} ,function(rdata){
+                    if (!rdata.status){
+                        return;
+                    }
+                    var data = rdata.data;
+                    if (!data.status){
+                        return;
+                    }
+
+                    var real_data = data.data;
+                    var req_time = real_data.time;
+                    var my_status = real_data.data;
+                    var pd_data = my_status['Read_Master_Log_Pos'] - my_status['Exec_Master_Log_Pos'];
+                    var retrieved_gtid_backlog = 0;
+                    var executed_gtid_backlog = 0;
+                    var gtid_diff = 0;
+
+                    var seconds_behind_master = 0;
+                    if ('Seconds_Behind_Source' in my_status){
+                        seconds_behind_master = my_status["Seconds_Behind_Source"];
+                    } else {
+                        seconds_behind_master = my_status["Seconds_Behind_Master"];
+                    } 
+
+                    // 已拉取的GTID集合积压
+                    if (my_status['Retrieved_Gtid_Set'] != ''){
+                        // 639b3c89-1a74-11f0-8027-7cd30ab0ff74:7729919001-7735855943
+                        var t = my_status['Retrieved_Gtid_Set'];
+                        t = t.split(":");
+                        t = t[1].split("-");
+                        console.log("retrieved_gtid_backlog:",t);
+                        retrieved_gtid_backlog = parseInt(t[1]) - parseInt(t[0]);
+                    }
+
+                    // 已执行的GTID集合积压
+                    if (my_status['Executed_Gtid_Set'] != ''){
+                        // 639b3c89-1a74-11f0-8027-7cd30ab0ff74:7729919001-7735931881,dd4515c3-7dc2-11f0-b6ec-f8f9dd000001:1-6794
+                        var t = my_status['Executed_Gtid_Set'];
+                        t = t.split(",");
+                        var vaild_exec_data = '';
+                        for (var i = 0; i < t.length; i++) {
+                            // console.log(t[i]);
+                            var tmp = t[i].split(":");
+                            var val = tmp[1].split("-");
+                            if (val[0] == "1"){
+                                continue;
+                            }
+                            vaild_exec_data = t[i];
+                        }
+
+                        if (vaild_exec_data == ''){
+                            executed_gtid_backlog = 0;
+                        } else {
+                            var exec_data_list = vaild_exec_data.split(":");
+                            console.log("executed_gtid_backlog:",vaild_exec_data);
+                            var start = exec_data_list[1].split("-")[0];
+                            var end = exec_data_list.at(-1).split("-")[1];
+                            if (!end){
+                                end = exec_data_list[1].split("-")[1];
+                            }
+                            console.log("executed_gtid_backlog:",start,end);
+                            executed_gtid_backlog = end - start;
+                        }
+                    }
+
+                    if(retrieved_gtid_backlog == 0){
+                        gtid_diff = 0;
+                    } else {
+                        gtid_diff = retrieved_gtid_backlog - executed_gtid_backlog;
+                    }
+                    console.log('gtid_diff:',gtid_diff,retrieved_gtid_backlog,executed_gtid_backlog);
+
+                    var last_time = parseTimeToSec(xData[xData.length - 1]);
+                    var last_gtid_diff = gtidData.length ? gtidData[gtidData.length - 1] : null;
+                    var now_time = parseTimeToSec(req_time);
+
+                    // 估算多久同步完:时间字符串不能直接相减,先转秒级时间戳
+                    var total_second = null;
+                    var exec_per_second = 0;
+                    if (last_time !== null && now_time !== null
+                        && last_gtid_diff !== null && now_time > last_time){
+                        exec_per_second = (last_gtid_diff - gtid_diff) / (now_time - last_time);
+                        if (exec_per_second > 0){
+                            total_second = gtid_diff / exec_per_second;
+                        }
+                    }
+                    console.log("last_time:",last_time,"now_time:",now_time,"exec_per_second:",exec_per_second,"total_second:",total_second);
+
+                    xData.push(req_time);
+                    yData.push(seconds_behind_master);
+                    pdData.push(pd_data);
+                    gtidData.push(gtid_diff);
+                    
+
+                    if (xData.length > 20){
+                        xData.shift();
+                        yData.shift();
+                        pdData.shift();
+                        gtidData.shift();
+                    }
+
+                    statEc.setOption({
+                        xAxis: {
+                            data: xData
+                        },
+                        series: [
+                            { name: legend_name[0], data: yData},
+                            { name: legend_name[1], data: pdData},
+                            { name: legend_name[2], data: gtidData},
+                        ]
+                    });
+
+                    $('.slave_sync_info').text(
+                        'GTID积压: ' + gtid_diff
+                        + ' | 回放延迟: ' + pd_data + ' bytes'
+                        + ' | 秒级延迟: ' + seconds_behind_master
+                        + ' | GTID同步速度: ' + Math.floor(exec_per_second) + '/s'
+                        + ' | 预计同步完: ' + (gtid_diff <= 0 ? '已同步' : formatSecond(total_second))
+                    );
+                });
+            },3000);
+        },
+        // 弹窗关闭后清理定时器与图表实例,避免重复打开产生多个定时器并访问已销毁实例
+        end:function(){
+            if (timer){ clearInterval(timer); timer = null; }
+            if (statEc){ statEc.dispose(); statEc = null; }
+        }
+    });
+
+}
+
 function mysqlCommonFunc(){
     $('#mysql_common').unbind('click').click(function(){
         layer.open({
             type: 1,
             title: "MySQL常用功能",
-            area: ['600px', '200px'],
+            area: ['600px', '230px'],
             closeBtn: 1,
             shadeClose: false,
             content: '<div class="bt-form pd20">\
@@ -833,6 +1207,8 @@ function mysqlCommonFunc(){
                 <button style="margin-bottom: 8px;" id="mysql_lock_sql" type="button" class="btn btn-default btn-sm">查看当前锁阻塞的SQL</button>\
                 <button style="margin-bottom: 8px;" id="mysql_deadlock_info" type="button" class="btn btn-default btn-sm">查看死锁信息</button>\
                 <button style="margin-bottom: 8px;" id="mysql_slave_status" type="button" class="btn btn-default btn-sm">查看主从复制信息</button>\
+                <button style="margin-bottom: 8px;" id="mysql_slave_sync_progress" type="button" class="btn btn-default btn-sm">查看从延迟进度</button>\
+                <button style="margin-bottom: 8px;" id="mysql_health" type="button" class="btn btn-default btn-sm">查看健康</button>\
             </div>',
             success:function(i,l){
                 $('#mysql_top_nsql').click(function(){
@@ -869,6 +1245,14 @@ function mysqlCommonFunc(){
 
                 $('#mysql_slave_status').click(function(){
                     mysqlCommonFuncSlaveStatus();
+                });
+
+                $('#mysql_slave_sync_progress').click(function(){
+                    mysqlSlaveSyncProgress();
+                });
+
+                $('#mysql_health').click(function(){
+                    mysqlCommonFuncHealth();
                 });
             }
         });
@@ -927,6 +1311,7 @@ function mysqlInitField(f, data){
 
 
 function mysqlGetServerList(call_func){
+    closeInstallLayer();
     myPostCBN('get_server_list', {}, function(rdata){
         var rdata = rdata.data;
         if (rdata.data.length != 0){
@@ -951,7 +1336,15 @@ function mysqlGetServerList(call_func){
             }
             closeInstallLayer();
         } else {
-            showInstallLayer();
+
+            if (rdata.data.length != 0 ){
+                layer.msg(rdata.data.msg,{ icon: 7, time: 2000, shade: 0.3 });
+            } else {
+                layer.msg("当前未安装MySQL!",{ icon: 7, time: 2000, shade: 0.3 });
+            }
+            setTimeout(function(){
+                showInstallLayer();
+            },2050);
         }
     });
 }
@@ -1201,9 +1594,9 @@ function memcachedGetItem(){
 
 function memcachedGetList(){
     var sid = memcachedGetSid();
+    closeInstallLayer();
     memPostCB('get_items',{'sid':sid} ,function(rdata){
         if (rdata.data.status){
-
             var items = rdata.data.data['items'];
             var content = '';
             for (var i = 0; i < items.length; i++) {
@@ -1219,10 +1612,14 @@ function memcachedGetList(){
                 memcachedGetKeyList(1);
             });
             closeInstallLayer();
+            memcachedGetKeyList(1);
         } else {
-            showInstallLayer();
+            layer.msg(rdata.data.msg,{ icon: 7, time: 2000, shade: 0.3 });
+            setTimeout(function(){
+                showInstallLayer();
+            },2050);
         }
-        memcachedGetKeyList(1);
+        
     });
 }
 
@@ -1382,11 +1779,12 @@ function mongodbInitField(f, data){
     $('#mongodb .mongodb_refresh').unbind('click').click(function(){
         mongodbDataList(1);
     });
+
+    mgdbCommonFunc();
 }
 
 var mogodb_db_list;
 function mongodbCollectionName(){
-    // console.log(mogodb_db_list);
     var v = mogodb_db_list.getValue('value');
     if (v.length == 0){
         // console.log($('#mongodb').data('collection'));
@@ -1397,6 +1795,7 @@ function mongodbCollectionName(){
 
 function mongodbGetList(){
     var sid = mongodbGetSid();
+    closeInstallLayer();
     mgdbPostCB('get_db_list',{'sid':sid} ,function(rdata){
         // console.log(rdata);
         if (rdata.data.status){
@@ -1423,7 +1822,11 @@ function mongodbGetList(){
 
             closeInstallLayer();
         } else {
-            showInstallLayer();
+            layer.msg(rdata.data.msg,{ icon: 7, time: 2000, shade: 0.3 });
+            setTimeout(function(){
+                showInstallLayer();
+            },2050);
+            
         }
     });
 }
@@ -1549,9 +1952,14 @@ function mongodbDataList(p){
 
                     if (f in dlist[i]) {
                         if (f == '_id' ){
-                            tbody += '<td>'+dlist[i]['_id']['$oid']+'</td>';
+                            tbody += '<td>'+dlist[i]['_id']+'</td>';
                         } else {
-                            tbody += '<td>'+dlist[i][f]+'</td>';
+                            var val = dlist[i][f];
+                            // 展平函数: 避免任何剩余对象显示 [object Object]
+                            if (val !== null && typeof val === 'object') {
+                                val = JSON.stringify(val);
+                            }
+                            tbody += '<td>'+val+'</td>';
                         }
                     } else {
                         tbody += '<td>undefined</td>';
@@ -1573,7 +1981,7 @@ function mongodbDataList(p){
 
             $('#mongodb .del').click(function(){
                 var i = $(this).data('index');
-                mongodbDel(dlist[i]['_id']['$oid']);
+                mongodbDel(dlist[i]['_id']);
             });
         }
     });
@@ -1606,6 +2014,7 @@ function redisGetIdx(){
 
 function redisGetList(){
     var sid = redisGetSid();
+    closeInstallLayer();
     redisPostCB('get_list',{'sid':sid} ,function(rdata){
         if (rdata.data.status){
             var list = rdata.data.data;
@@ -1627,7 +2036,10 @@ function redisGetList(){
             redisGetKeyList(1);
             closeInstallLayer();
         } else {
-            showInstallLayer();
+            layer.msg(rdata.data.msg,{ icon: 7, time: 1000, shade: 0.3 });
+            setTimeout(function(){
+                showInstallLayer();
+            },1050);
         }
     });
 }
@@ -1935,4 +2347,716 @@ function redisBatchClear(){
     });
 }
 // ------------------------- redis end ---------------------------------
+
+// ------------------------- postgresql start -------------------------------
+var pg_timer = null;
+var pg_last_error = '';
+
+function pgToastError(msg){
+    // 轮询失败时避免每 2 秒重复弹出相同的提示
+    if (!msg || pg_last_error == msg){
+        return;
+    }
+    pg_last_error = msg;
+    layer.msg(msg,{icon:7,time:2500});
+}
+
+function pgHtml(v){
+    if (v === null || v === undefined){
+        return '';
+    }
+    return String(v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function pgGetSid(){
+    return $('#postgresql select[name=sid]').val();
+}
+
+function pgGetDbName(){
+    return $('#postgresql .postgresql_db_list select[name=postgresql_db]').val();
+}
+
+function pgGetTableName(){
+    var table = $('#postgresql .postgresql_table_list select[name=postgresql_table]').val();
+    if (!table || table == '0'){
+        return '';
+    }
+    return table;
+}
+
+function pgShowNotice(title, msg){
+    layer.open({
+        type: 1,
+        title: title,
+        area: ['560px', '260px'],
+        closeBtn: 1,
+        shadeClose: false,
+        content: '<div class="bt-form pd20"><pre style="white-space:pre-wrap;word-break:break-all;margin:0;line-height:1.8;">'+pgHtml(msg)+'</pre></div>'
+    });
+}
+
+function pgModalTable(title, list, width, height){
+    if (!list || list.length == 0){
+        layer.msg('暂无数据',{icon:7});
+        return;
+    }
+
+    var fields = mongodbGetDataFields(list);
+    var thead = '';
+    for (var i = 0; i < fields.length; i++){
+        thead += '<th>'+pgHtml(fields[i])+'</th>';
+    }
+
+    var tbody = '';
+    for (var i = 0; i < list.length; i++){
+        tbody += '<tr>';
+        for (var j = 0; j < fields.length; j++){
+            var f = fields[j];
+            var val = (f in list[i]) ? list[i][f] : '';
+            tbody += '<td title="'+pgHtml(val)+'">'+pgHtml(val)+'</td>';
+        }
+        tbody += '</tr>';
+    }
+
+    layer.open({
+        type: 1,
+        title: title,
+        area: [width || '900px', height || '420px'],
+        closeBtn: 1,
+        shadeClose: false,
+        content: '<div class="bt-form pd20 divtable taskdivtable" style="height:'+(parseInt(height || '420') - 80)+'px;overflow:auto;">\
+            <table class="table table-hover">\
+                <thead><tr>'+thead+'</tr></thead>\
+                <tbody>'+tbody+'</tbody>\
+            </table>\
+        </div>'
+    });
+}
+
+function pgInitField(f, data){
+    var option_html = '<option value="0">无字段</option>';
+    for (var i = 0; i < f.length; i++){
+        if (data['soso_field'] == f[i]){
+            option_html += '<option value="'+pgHtml(f[i])+'" selected>'+pgHtml(f[i])+'</option>';
+        } else {
+            option_html += '<option value="'+pgHtml(f[i])+'">'+pgHtml(f[i])+'</option>';
+        }
+    }
+    $('#postgresql select[name="postgresql_field_key"]').html(option_html);
+}
+
+function initTabPostgresql(){
+    clearInterval(pg_timer);
+    pg_last_error = '';
+
+    pgGetServerList(function(){
+        pgGetDbList();
+        pgProcessList();
+
+        clearInterval(pg_timer);
+        pg_timer = setInterval(function(){
+            var name = $('#postgresql_list_tab .tab-nav span.on').data('name');
+            pgRunPgTab(name);
+
+            var fname = $('#cutTab .tabs-item.active').data('name');
+            if (fname != 'postgresql'){
+                clearInterval(pg_timer);
+            }
+        }, 2000);
+    });
+
+    $('#postgresql_list_tab .tab-nav span').unbind('click').click(function(){
+        $('#postgresql_list_tab .tab-nav span').removeClass('on');
+        $(this).addClass('on');
+        var name = $(this).data('name');
+        pgRunPgTab(name);
+    });
+
+    $('#postgresql_find').unbind('click').click(function(){
+        var val = $('#postgresql input[name="postgresql_field_value"]').val();
+        if (val == ''){
+            layer.msg('搜索不能为空!',{icon:7});
+            return;
+        }
+        pgGetDataList(1);
+    });
+
+    pgCommonFunc();
+}
+
+function pgRunPgTab(name){
+    switch(name){
+        case 'proccess':pgProcessList();break;
+        case 'status':pgStatusList();break;
+        case 'stats':pgStatsList();break;
+    }
+}
+
+function pgGetServerList(call_func){
+    closeInstallLayer();
+    pgPostCBN('get_server_list', {}, function(rdata){
+        var data = rdata.data;
+        if (data.data && data.data.length != 0){
+            var items = data.data;
+            var content = '';
+            for (var i = 0; i < items.length; i++){
+                var t = items[i];
+                if (i == 0){
+                    content += '<option value="'+t['val']+'" selected>'+t['name']+'</option>';
+                } else {
+                    content += '<option value="'+t['val']+'">'+t['name']+'</option>';
+                }
+            }
+
+            $('#postgresql select[name=sid]').html(content);
+            $('#postgresql select[name=sid]').change(function(){
+                pgGetDbList();
+            });
+
+            if (typeof(call_func) == 'function'){
+                call_func();
+            }
+            closeInstallLayer();
+        } else {
+            layer.msg('当前未安装 PostgreSQL',{icon:7,time:2000,shade:0.3});
+            setTimeout(function(){
+                showInstallLayer();
+            },2050);
+        }
+    });
+}
+
+function pgGetDbList(){
+    var sid = pgGetSid();
+    pgPostCBN('get_db_list',{'sid':sid}, function(rdata){
+        var data = rdata.data;
+        if (!data.status){
+            layer.msg(data.msg,{icon:7,time:2500});
+            return;
+        }
+
+        var items = data.data['list'];
+        if (items.length == 0){
+            $('#postgresql .postgresql_db_list select[name=postgresql_db]').html('<option value="0">数据库空</option>');
+            $('#postgresql .postgresql_table_list select[name=postgresql_table]').html('<option value="0">数据表空</option>');
+            $('#postgresql_table thead tr').html('');
+            $('#postgresql_table tbody').html('');
+            $('.postgresql_list_page').html('<div><span class="Pcurrent">0</span><span class="Pcount">共0条</span></div>');
+            return;
+        }
+
+        var content = '';
+        for (var i = 0; i < items.length; i++){
+            var name = items[i];
+            if (i == 0){
+                content += '<option value="'+pgHtml(name)+'" selected>database['+pgHtml(name)+']</option>';
+            } else {
+                content += '<option value="'+pgHtml(name)+'">database['+pgHtml(name)+']</option>';
+            }
+        }
+
+        $('#postgresql .postgresql_db_list select[name=postgresql_db]').html(content);
+        $('#postgresql .postgresql_db_list select[name=postgresql_db]').change(function(){
+            pgGetTableList(1);
+        });
+
+        pgGetTableList(1);
+    });
+}
+
+function pgGetTableList(p){
+    var sid = pgGetSid();
+    var db = pgGetDbName();
+    if (!db || db == '0'){
+        return;
+    }
+
+    pgPostCBN('get_table_list',{'sid':sid,'db':db}, function(rdata){
+        var data = rdata.data;
+        if (!data.status){
+            layer.msg(data.msg,{icon:7,time:2500});
+            return;
+        }
+
+        var items = data.data['list'];
+        if (items.length == 0){
+            $('#postgresql .postgresql_table_list select[name=postgresql_table]').html('<option value="0">数据表空</option>');
+            $('#postgresql_table thead tr').html('');
+            $('#postgresql_table tbody').html('');
+            $('.postgresql_list_page').html('<div><span class="Pcurrent">0</span><span class="Pcount">共0条</span></div>');
+            return;
+        }
+
+        var content = '';
+        for (var i = 0; i < items.length; i++){
+            var name = items[i];
+            if (i == 0){
+                content += '<option value="'+pgHtml(name)+'" selected>table['+pgHtml(name)+']</option>';
+            } else {
+                content += '<option value="'+pgHtml(name)+'">table['+pgHtml(name)+']</option>';
+            }
+        }
+
+        $('#postgresql .postgresql_table_list select[name=postgresql_table]').html(content);
+        $('#postgresql .postgresql_table_list select[name=postgresql_table]').change(function(){
+            pgGetDataList(1);
+        });
+
+        pgGetDataList(1);
+    });
+}
+
+function pgGetDataList(p){
+    var sid = pgGetSid();
+    var db = pgGetDbName();
+    var table = pgGetTableName();
+
+    var pg_field = $('#postgresql select[name="postgresql_field_key"]').val();
+    var pg_value = $('#postgresql input[name="postgresql_field_value"]').val();
+
+    var request_data = {
+        'sid': sid,
+        'db': db,
+        'table': table,
+        'p': p,
+        'size': 10
+    };
+
+    if (pg_field != '0' && pg_field){
+        request_data['where'] = {field: pg_field, value: pg_value};
+    } else {
+        request_data['where'] = {};
+    }
+
+    pgPostCB('get_data_list', request_data, function(rdata){
+        var data = rdata.data;
+        if (!data.status){
+            layer.msg(data.msg,{icon:7,time:2500});
+            return;
+        }
+
+        var rdata2 = data.data;
+        var dlist = rdata2['list'];
+        var fields = mongodbGetDataFields(dlist);
+        if (fields.length != 0){
+            pgInitField(fields, rdata2);
+        }
+
+        var header_field = '';
+        for (var i = 0; i < fields.length; i++){
+            header_field += '<th>'+pgHtml(fields[i])+'</th>';
+        }
+        $('#postgresql_table thead tr').html(header_field);
+
+        var tbody = '';
+        for (var i = 0; i < dlist.length; i++){
+            tbody += '<tr>';
+            for (var j = 0; j < fields.length; j++){
+                var f = fields[j];
+                var val = (f in dlist[i]) ? dlist[i][f] : '';
+                tbody += '<td title="'+pgHtml(val)+'">'+pgHtml(val)+'</td>';
+            }
+            tbody += '</tr>';
+        }
+        $('#postgresql_table tbody').html(tbody);
+        $('#postgresql .postgresql_list_page').html(rdata2['page']);
+    });
+}
+
+function pgRenderOtTable(dlist){
+    var fields = mongodbGetDataFields(dlist);
+
+    var header_field = '';
+    for (var i = 0; i < fields.length; i++){
+        header_field += '<th>'+pgHtml(fields[i])+'</th>';
+    }
+    $('#postgresql_ot_table thead tr').html(header_field);
+
+    var tbody = '';
+    for (var i = 0; i < dlist.length; i++){
+        tbody += '<tr>';
+        for (var j = 0; j < fields.length; j++){
+            var f = fields[j];
+            var val = (f in dlist[i]) ? dlist[i][f] : '';
+            tbody += '<td title="'+pgHtml(val)+'">'+pgHtml(val)+'</td>';
+        }
+        tbody += '</tr>';
+    }
+    $('#postgresql_ot_table tbody').html(tbody);
+}
+
+function pgProcessList(){
+    pgPostCBN('get_proccess_list',{'sid':pgGetSid()}, function(rdata){
+        var data = rdata.data;
+        if (!data.status){
+            pgToastError(data.msg);
+            return;
+        }
+        pg_last_error = '';
+        pgRenderOtTable(data.data['list']);
+    });
+}
+
+function pgStatusList(){
+    pgPostCBN('get_status_list',{'sid':pgGetSid()}, function(rdata){
+        var data = rdata.data;
+        if (!data.status){
+            pgToastError(data.msg);
+            return;
+        }
+        pg_last_error = '';
+        pgRenderOtTable(data.data['list']);
+    });
+}
+
+function pgStatsList(){
+    pgPostCBN('get_stats_list',{'sid':pgGetSid()}, function(rdata){
+        var data = rdata.data;
+        if (!data.status){
+            pgToastError(data.msg);
+            return;
+        }
+        pg_last_error = '';
+        pgRenderOtTable(data.data['list']);
+    });
+}
+
+function pgCommonFunc(){
+    $('#postgresql_common').unbind('click').click(function(){
+        layer.open({
+            type: 1,
+            title: "PostgreSQL常用功能",
+            area: ['600px', '230px'],
+            closeBtn: 1,
+            shadeClose: false,
+            content: '<div class="bt-form pd20">\
+                <button style="margin-bottom: 8px;" id="pg_top_nsql" type="button" class="btn btn-default btn-sm">查询执行次数最频繁的前N条SQL语句</button>\
+                <button style="margin-bottom: 8px;" id="pg_net_stat" type="button" class="btn btn-default btn-sm">PostgreSQL服务器的QPS/TPS指标</button>\
+                <button style="margin-bottom: 8px;" id="pg_redundant_indexes" type="button" class="btn btn-default btn-sm">查看重复或冗余的索引</button>\
+                <button style="margin-bottom: 8px;" id="pg_table_info" type="button" class="btn btn-default btn-sm">统计库里每个表的大小</button>\
+                <button style="margin-bottom: 8px;" id="pg_conn_count" type="button" class="btn btn-default btn-sm">查看应用端IP连接数总和</button>\
+                <button style="margin-bottom: 8px;" id="pg_fpk_info" type="button" class="btn btn-default btn-sm">快速找出没有主键的表</button>\
+                <button style="margin-bottom: 8px;" id="pg_lock_sql" type="button" class="btn btn-default btn-sm">查看当前锁阻塞的SQL</button>\
+                <button style="margin-bottom: 8px;" id="pg_deadlock_info" type="button" class="btn btn-default btn-sm">查看死锁信息</button>\
+                <button style="margin-bottom: 8px;" id="pg_slave_status" type="button" class="btn btn-default btn-sm">查看主从复制信息</button>\
+                <button style="margin-bottom: 8px;" id="pg_health" type="button" class="btn btn-default btn-sm">查看健康</button>\
+            </div>',
+            success:function(i,l){
+                $('#pg_top_nsql').click(function(){ pgCommonFuncTopN(); });
+                $('#pg_net_stat').click(function(){ pgCommonFuncNet(); });
+                $('#pg_redundant_indexes').click(function(){ pgCommonFuncRedundantIndexes(); });
+                $('#pg_table_info').click(function(){ pgCommonFuncTableInfo(); });
+                $('#pg_conn_count').click(function(){ pgCommonFuncConnCount(); });
+                $('#pg_fpk_info').click(function(){ pgCommonFuncFpkInfo(); });
+                $('#pg_lock_sql').click(function(){ pgCommonFuncLockSQL(); });
+                $('#pg_deadlock_info').click(function(){ pgCommonFuncDeadlockInfo(); });
+                $('#pg_slave_status').click(function(){ pgCommonFuncSlaveStatus(); });
+                $('#pg_health').click(function(){ pgCommonFuncHealth(); });
+            }
+        });
+    });
+}
+
+function pgCommonFuncHealth(){
+    dataQueryShowHealth('postgresql', 'PostgreSQL 健康检查', pgPostCBN, {'sid': pgGetSid()});
+}
+
+// ==================== MongoDB 常用功能 ====================
+function mgdbCommonFunc(){
+    $('#mongodb_common').unbind('click').click(function(){
+        layer.open({
+            type: 1,
+            title: "MongoDB常用功能",
+            area: ['600px', '120px'],
+            closeBtn: 1,
+            shadeClose: false,
+            content: '<div class="bt-form pd20">\
+                <button style="margin-bottom: 8px;" id="mgdb_health" type="button" class="btn btn-default btn-sm">查看健康</button>\
+            </div>',
+            success:function(i,l){
+                $('#mgdb_health').click(function(){ mgdbCommonFuncHealth(); });
+            }
+        });
+    });
+}
+
+function mgdbCommonFuncHealth(){
+    dataQueryShowHealth('mongodb', 'MongoDB 健康检查', mgdbPostCB, {'sid': mongodbGetSid()});
+}
+
+// ==================== Redis 常用功能 ====================
+function redisCommonFunc(){
+    $('#redis_common').unbind('click').click(function(){
+        layer.open({
+            type: 1,
+            title: "Redis常用功能",
+            area: ['600px', '120px'],
+            closeBtn: 1,
+            shadeClose: false,
+            content: '<div class="bt-form pd20">\
+                <button style="margin-bottom: 8px;" id="redis_health" type="button" class="btn btn-default btn-sm">查看健康</button>\
+            </div>',
+            success:function(i,l){
+                $('#redis_health').click(function(){ redisCommonFuncHealth(); });
+            }
+        });
+    });
+}
+
+function redisCommonFuncHealth(){
+    dataQueryShowHealth('redis', 'Redis 健康检查', redisPostCB, {'sid': 0});
+}
+
+function pgCommonFuncTopN(){
+    pgPostCBN('get_topn_list',{'sid':pgGetSid()}, function(rdata){
+        var data = rdata.data;
+        if (!data.status){
+            pgShowNotice('查询执行次数最频繁的前N条SQL语句', data.msg);
+            return;
+        }
+        pgModalTable('查询执行次数最频繁的前N条SQL语句', data.data, '1000px', '450px');
+    });
+}
+
+function pgCommonFuncNet(){
+    pgPostCBN('get_net_list',{'sid':pgGetSid()}, function(rdata){
+        var data = rdata.data;
+        if (!data.status){
+            pgShowNotice('PostgreSQL服务器的QPS/TPS指标', data.msg);
+            return;
+        }
+        pgModalTable('PostgreSQL服务器的QPS/TPS指标（网络带宽需在系统层监控）', data.data, '1000px', '360px');
+    });
+}
+
+function pgCommonFuncRedundantIndexes(){
+    function renderList(){
+        pgPostCBN('get_redundant_indexes',{'sid':pgGetSid()}, function(rdata){
+            var data = rdata.data;
+            if (!data.status){
+                layer.msg(data.msg,{icon:7,time:2500});
+                return;
+            }
+
+            var items = data.data;
+            if (items.length == 0){
+                layer.msg('没有发现重复或冗余的索引',{icon:7});
+                return;
+            }
+
+            var tbody = '';
+            for (var i = 0; i < items.length; i++){
+                tbody += '<tr>\
+                    <td>'+pgHtml(items[i]['table_schema'])+'</td>\
+                    <td>'+pgHtml(items[i]['table_name'])+'</td>\
+                    <td>'+pgHtml(items[i]['redundant_index_name'])+'</td>\
+                    <td>'+pgHtml(items[i]['redundant_index_columns'])+'</td>\
+                    <td><a class="pg_drop_index btlink" index="'+i+'">删除</a></td>\
+                </tr>';
+            }
+
+            layer.open({
+                type: 1,
+                title: "查看重复或冗余的索引",
+                area: ['1000px', '420px'],
+                closeBtn: 1,
+                shadeClose: false,
+                content: '<div class="bt-form pd20 divtable taskdivtable">\
+                    <table class="table table-hover" id="pg_redundant_table">\
+                        <thead><tr>\
+                            <th>库名</th><th>表名</th><th>冗余索引</th><th>字段</th><th>操作</th>\
+                        </tr></thead>\
+                        <tbody>'+tbody+'</tbody>\
+                    </table>\
+                </div>',
+                success: function(){
+                    $('#pg_redundant_table .pg_drop_index').click(function(){
+                        var index = $(this).attr('index');
+                        layer.confirm('确定删除索引 '+pgHtml(items[index]['redundant_index_name'])+' ?', {btn:['确定','取消']}, function(li){
+                            pgPostCB('redundant_indexes_cmd', {'sid':pgGetSid(),'index':index}, function(r2){
+                                var d = r2.data;
+                                showMsg(d.msg,function(){
+                                    if (d.status){
+                                        layer.close(li);
+                                        renderList();
+                                    }
+                                },{icon: d.status ? 1 : 2}, 2000);
+                            });
+                        });
+                    });
+                }
+            });
+        });
+    }
+    renderList();
+}
+
+function pgCommonFuncTableInfo(){
+    pgPostCBN('get_table_info',{'sid':pgGetSid()}, function(rdata){
+        var data = rdata.data;
+        if (!data.status){
+            pgShowNotice('统计库里每个表的大小（单位 GB）', data.msg);
+            return;
+        }
+        pgModalTable('统计库里每个表的大小（单位 GB）', data.data, '1200px', '460px');
+    });
+}
+
+function pgCommonFuncConnCount(){
+    pgPostCBN('get_conn_count',{'sid':pgGetSid()}, function(rdata){
+        var data = rdata.data;
+        if (!data.status){
+            pgShowNotice('查看应用端IP连接数总和', data.msg);
+            return;
+        }
+        pgModalTable('查看应用端IP连接数总和', data.data, '700px', '420px');
+    });
+}
+
+function pgCommonFuncFpkInfo(){
+    pgPostCBN('get_fpk_info',{'sid':pgGetSid()}, function(rdata){
+        var data = rdata.data;
+        if (!data.status){
+            layer.msg(data.msg,{icon:7,time:2500});
+            return;
+        }
+        pgModalTable('快速找出没有主键的表', data.data, '800px', '400px');
+    });
+}
+
+function pgCommonFuncLockSQL(){
+    function renderSQL(){
+        pgPostCBN('get_lock_sql',{'sid':pgGetSid()}, function(rdata){
+            var data = rdata.data;
+            if (!data.status){
+                layer.msg(data.msg,{icon:7,time:2500});
+                return;
+            }
+
+            var items = data.data;
+            var tbody = '';
+            for (var i = 0; i < items.length; i++){
+                var t = '<tr>';
+                t += '<td>'+pgHtml(items[i]['trx_id'])+'</td>';
+                t += '<td>'+pgHtml(items[i]['trx_state'])+'</td>';
+                t += '<td>'+pgHtml(items[i]['trx_started'])+'</td>';
+                t += '<td>'+pgHtml(items[i]['processlist_id'])+'</td>';
+                t += '<td title="'+pgHtml(items[i]['info'])+'">'+pgHtml(items[i]['info'])+'</td>';
+                t += '<td>'+pgHtml(items[i]['user'])+'</td>';
+                t += '<td>'+pgHtml(items[i]['host'])+'</td>';
+                t += '<td>'+pgHtml(items[i]['db'])+'</td>';
+                t += '<td>'+pgHtml(items[i]['command'])+'</td>';
+                t += '<td>'+pgHtml(items[i]['state'])+'</td>';
+                t += '<td>'+pgHtml(items[i]['sql_kill_blocking_query'])+'</td>';
+                t += '<td><a class="exec btlink" index="'+i+'">执行</a></td>';
+                t += '</tr>';
+                tbody += t;
+            }
+            $('#pg_lock_table tbody').html(tbody);
+
+            $('#pg_lock_table tbody .exec').click(function(){
+                var index = $(this).attr('index');
+                var pid = items[index]['processlist_id'];
+                pgPostCB('kill_lock_pid', {'sid':pgGetSid(),'pid':pid}, function(r2){
+                    var d = r2.data;
+                    showMsg(d.msg,function(){
+                        if (d.status){
+                            renderSQL();
+                        }
+                    },{icon: d.status ? 1 : 2}, 2000);
+                });
+            });
+        });
+    }
+
+    layer.open({
+        type: 1,
+        title: "查看当前锁阻塞的SQL",
+        area: ['1100px', '420px'],
+        closeBtn: 1,
+        shadeClose: false,
+        content: '<div class="bt-form pd20 divtable taskdivtable">\
+            <div class="mr20 pull-left" style="border-right: 1px solid #ccc; padding-right: 20px;">\
+                <button id="pg_kill_all" type="button" class="btn btn-default btn-sm">关闭所有阻塞</button>\
+            </div>\
+            <hr />\
+            <table class="table table-hover" id="pg_lock_table">\
+                <thead><tr>\
+                    <th>事务ID</th><th>事务状态</th><th>执行时间</th><th>线程ID</th>\
+                    <th>Info</th><th>user</th><th>host</th><th>db</th>\
+                    <th>command</th><th>state</th><th>kill</th><th>操作</th>\
+                </tr></thead>\
+                <tbody></tbody>\
+            </table>\
+        </div>',
+        success:function(){
+            renderSQL();
+            $('#pg_kill_all').unbind('click').click(function(){
+                pgPostCB('kill_all_lock', {'sid':pgGetSid()}, function(r2){
+                    var d = r2.data;
+                    showMsg(d.msg,function(){
+                        if (d.status){
+                            renderSQL();
+                        }
+                    },{icon: d.status ? 1 : 2}, 2000);
+                });
+            });
+        }
+    });
+}
+
+function pgCommonFuncDeadlockInfo(){
+    function renderText(){
+        pgPostCBN('get_deadlock_info',{'sid':pgGetSid()}, function(rdata){
+            var data = rdata.data;
+            if (!data.status){
+                layer.msg(data.msg,{icon:7,time:2500});
+                return;
+            }
+            $('#pg_info_log').val(data.data);
+        });
+    }
+
+    layer.open({
+        type: 1,
+        title: "查看死锁信息",
+        area: ['800px', '400px'],
+        closeBtn: 1,
+        shadeClose: false,
+        content: '<div class="bt-form pd15">\
+            <textarea readonly="" style="margin: 0px;height: 330px;width: 100%;background-color: #333;color:#fff; padding:0 5px" id="pg_info_log"></textarea>\
+        </div>',
+        success:function(){
+            renderText();
+        }
+    });
+}
+
+function pgCommonFuncSlaveStatus(){
+    function renderText(){
+        pgPostCBN('get_slave_status',{'sid':pgGetSid()}, function(rdata){
+            var data = rdata.data;
+            if (!data.status){
+                layer.msg(data.msg,{icon:7,time:2500});
+                return;
+            }
+            $('#pg_info_log').val(data.data);
+        });
+    }
+
+    layer.open({
+        type: 1,
+        title: "查看主从复制信息",
+        area: ['800px', '400px'],
+        closeBtn: 1,
+        shadeClose: false,
+        content: '<div class="bt-form pd15">\
+            <textarea readonly="" style="margin: 0px;height: 330px;width: 100%;background-color: #333;color:#fff; padding:0 5px" id="pg_info_log"></textarea>\
+        </div>',
+        success:function(){
+            renderText();
+        }
+    });
+}
+// ------------------------- postgresql end ---------------------------------
 

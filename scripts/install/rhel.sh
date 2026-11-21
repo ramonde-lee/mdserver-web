@@ -48,6 +48,8 @@ $PKGMGR install -y libzstd-devel
 $PKGMGR install -y postgresql-devel
 $PKGMGR install -y brotli-devel
 $PKGMGR install -y vim-common
+$PKGMGR install -y libudev-devel
+$PKGMGR install -y git
 
 echo "install remi source"
 if [ "$VERSION_ID" = "9" ];then

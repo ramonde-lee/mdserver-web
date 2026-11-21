@@ -1,5 +1,5 @@
 #!/bin/bash
-PATH=/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin:~/bin
+PATH=/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin:~/bin:/opt/homebrew/bin
 export PATH
 
 #https://www.postgresql.org/ftp/source/
@@ -11,8 +11,9 @@ serverPath=$(dirname "$rootPath")
 sysName=`uname`
 
 postgreDir=${serverPath}/source/postgresql
-VERSION=15.13
-
+VERSION=15.19
+OPTIONS=""
+action=$1
 # su - postgres -c "/www/server/postgresql/bin/pg_ctl start -D /www/server/postgresql/data"
 
 Install_App()
@@ -69,18 +70,31 @@ Install_App()
 		cd ${postgreDir} && tar -jxvf  ${postgreDir}/postgresql-${VERSION}.tar.bz2
 	fi
 	
+	if [ "$sysName" = "Darwin" ];then
+		OPENSSL_DEPEND_DIR=`brew --prefix openssl@3`
+		OPTIONS="$OPTIONS --with-includes="${OPENSSL_DEPEND_DIR}/include""
+		OPTIONS="$OPTIONS --with-libraries="${OPENSSL_DEPEND_DIR}/lib""
 
+		LIB_DEPEND_DIR=`brew --prefix icu4c`
+		export PKG_CONFIG_PATH="${LIB_DEPEND_DIR}/lib/pkgconfig:$PKG_CONFIG_PATH"
+		export PATH="${LIB_DEPEND_DIR}/bin:$PATH"
+		OPTIONS="$OPTIONS PKG_CONFIG_PATH="${LIB_DEPEND_DIR}/lib/pkgconfig""
+	fi
+	
 	if [ ! -d $serverPath/postgresql ];then
 		cd ${postgreDir}/postgresql-${VERSION} && ./configure \
 		--prefix=$serverPath/postgresql \
-		--with-openssl
+		--with-openssl \
+		$OPTIONS
 		# --with-pgport=33206
 
 		echo "cd ${postgreDir}/postgresql-${VERSION} && ./configure \
 		--prefix=$serverPath/postgresql \
 		--with-openssl"
 		# --with-pgport=33206
-		make -j${cpuCore} && make install && make clean
+		make -j${cpuCore} && make install
+		cd contrib && make && make install && cd ..
+		make clean
 	fi
 
 	if [ -d $serverPath/postgresql ];then
@@ -88,8 +102,9 @@ Install_App()
 		echo '安装postgresql成功'
 	else
 		echo '安装postgresql失败'
-		rm -rf ${postgreDir}/postgresql-${VERSION}.tar.bz2
 	fi
+	rm -rf ${postgreDir}/postgresql-${VERSION}
+	# rm -rf ${postgreDir}/postgresql-${VERSION}.tar.bz2
 }
 
 Uninstall_App()
@@ -119,7 +134,6 @@ Uninstall_App()
 	echo '卸载[postgresql]完成'
 }
 
-action=$1
 if [ "${1}" = "install" ];then
 	Install_App
 else

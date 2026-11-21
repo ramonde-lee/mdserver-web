@@ -114,6 +114,17 @@ function myPostCallbakN(method, version, args,callback){
     },'json'); 
 }
 
+// InnoDB 缓冲池命中率 = (1 - 物理读 / 逻辑读请求) * 100
+// 计数器可能为 0、被重置或口径不一致(物理读大于逻辑请求), 此时不能输出 NaN / 负值
+function innodbHitRate(reads, readRequests) {
+    var r = parseFloat(reads);
+    var q = parseFloat(readRequests);
+    if (!isFinite(r) || !isFinite(q) || isNaN(r) || isNaN(q) || q <= 0 || r < 0 || r > q) {
+        return '无法评估';
+    }
+    return ((1 - r / q) * 100).toFixed(2) + '%';
+}
+
 function runInfo(){
     myPost('run_info','',function(data){
 
@@ -139,7 +150,7 @@ function runInfo(){
                         <tr><th>活动/峰值连接数</th><td>' + rdata.Threads_running + '/' + rdata.Max_used_connections + '</td><td colspan="2">若值过大,增加max_connections</td></tr>\
                         <tr><th>线程缓存命中率</th><td>' + ((1 - rdata.Threads_created / rdata.Connections) * 100).toFixed(2) + '%</td><td colspan="2">若过低,增加thread_cache_size</td></tr>\
                         <tr><th>索引命中率</th><td>' + ((1 - rdata.Key_reads / rdata.Key_read_requests) * 100).toFixed(2) + '%</td><td colspan="2">若过低,增加key_buffer_size</td></tr>\
-                        <tr><th>Innodb索引命中率</th><td>' + (rdata.Innodb_buffer_pool_read_requests / (rdata.Innodb_buffer_pool_read_requests+rdata.Innodb_buffer_pool_reads)).toFixed(2) + '%</td><td colspan="2">若过低,增加innodb_buffer_pool_size</td></tr>\
+                        <tr><th>Innodb索引命中率</th><td>' + innodbHitRate(rdata.Innodb_buffer_pool_reads, rdata.Innodb_buffer_pool_read_requests) + '</td><td colspan="2">若过低,增加innodb_buffer_pool_size</td></tr>\
                         <tr><th>查询缓存命中率</th><td>' + cache_size + '</td><td colspan="2">' + lan.soft.mysql_status_ps5 + '</td></tr>\
                         <tr><th>创建临时表到磁盘</th><td>' + ((rdata.Created_tmp_disk_tables / rdata.Created_tmp_tables) * 100).toFixed(2) + '%</td><td colspan="2">若过大,尝试增加tmp_table_size</td></tr>\
                         <tr><th>已打开的表</th><td>' + rdata.Open_tables + '</td><td colspan="2">若过大,增加table_cache_size</td></tr>\
@@ -366,7 +377,6 @@ function mySQLMemOpt(opt) {
             $("input[name='thread_stack']").val(256);
             $("input[name='binlog_cache_size']").val(32);
             $("input[name='thread_cache_size']").val(4);
-            $("input[name='table_open_cache']").val(32);
             $("input[name='max_connections']").val(500);
             break;
         case '1':
@@ -381,7 +391,6 @@ function mySQLMemOpt(opt) {
             $("input[name='thread_stack']").val(256);
             $("input[name='binlog_cache_size']").val(64);
             $("input[name='thread_cache_size']").val(64);
-            $("input[name='table_open_cache']").val(128);
             $("input[name='max_connections']").val(100);
             break;
         case '2':
@@ -396,7 +405,6 @@ function mySQLMemOpt(opt) {
             $("input[name='thread_stack']").val(256);
             $("input[name='binlog_cache_size']").val(64);
             $("input[name='thread_cache_size']").val(96);
-            $("input[name='table_open_cache']").val(192);
             $("input[name='max_connections']").val(200);
             break;
         case '3':
@@ -411,7 +419,6 @@ function mySQLMemOpt(opt) {
             $("input[name='thread_stack']").val(256);
             $("input[name='binlog_cache_size']").val(128);
             $("input[name='thread_cache_size']").val(128);
-            $("input[name='table_open_cache']").val(384);
             $("input[name='max_connections']").val(300);
             break;
         case '4':
@@ -426,7 +433,6 @@ function mySQLMemOpt(opt) {
             $("input[name='thread_stack']").val(384);
             $("input[name='binlog_cache_size']").val(192);
             $("input[name='thread_cache_size']").val(192);
-            $("input[name='table_open_cache']").val(1024);
             $("input[name='max_connections']").val(400);
             break;
         case '5':
@@ -441,7 +447,6 @@ function mySQLMemOpt(opt) {
             $("input[name='thread_stack']").val(512);
             $("input[name='binlog_cache_size']").val(256);
             $("input[name='thread_cache_size']").val(256);
-            $("input[name='table_open_cache']").val(2048);
             $("input[name='max_connections']").val(500);
             break;
     }
@@ -507,16 +512,16 @@ function setRootPwd(type, pwd){
 
     var index = layer.open({
         type: 1,
-        area: '500px',
+        area: '600px',
         title: '修改数据库密码',
         closeBtn: 1,
         shift: 5,
-        btn:["提交", "关闭", "复制ROOT密码", "强制修改"],
+        btn:["提交", "关闭", "复制ROOT密码", "修改本地ROOT记录", "强改ROOT密码"],
         shadeClose: true,
         content: "<form class='bt-form pd20' id='mod_pwd'>\
                     <div class='line'>\
                         <span class='tname'>root密码</span>\
-                        <div class='info-r'><input class='bt-input-text mr5' type='text' name='password' id='MyPassword' style='width:330px' value='"+pwd+"' />\
+                        <div class='info-r'><input class='bt-input-text mr5' type='text' name='password' id='MyPassword' style='width:430px' value='"+pwd+"' />\
                             <span title='随机密码' class='glyphicon glyphicon-repeat cursor' onclick='repeatPwd(16)'></span>\
                         </div>\
                     </div>\
@@ -537,12 +542,28 @@ function setRootPwd(type, pwd){
             return false;
         },
         btn4:function(layerIndex){
-            layer.confirm('强制修改,是为了在重建时使用,确定强制?', {
+            layer.confirm('修改本地ROOT记录,确定修改?', {
                 btn: ['确定', '取消']
             }, function(index, layero){
                 layer.close(index);
                 var password = $("#MyPassword").val();
                 myPost('set_root_pwd', {password:password,force:'1'}, function(data){
+                    var rdata = $.parseJSON(data.data);
+                    showMsg(rdata.msg,function(){
+                        layer.close(layerIndex);
+                        dbList();
+                    },{icon: rdata.status ? 1 : 2});   
+                });
+            });
+            return false;
+        },
+        btn5:function(layerIndex){
+            layer.confirm('强制修改MySQL密码,确定强制? (比较耗时)', {
+                btn: ['确定', '取消']
+            }, function(index, layero){
+                layer.close(index);
+                var password = $("#MyPassword").val();
+                myPost('set_root_pwd', {password:password,force:'2'}, function(data){
                     var rdata = $.parseJSON(data.data);
                     showMsg(rdata.msg,function(){
                         layer.close(layerIndex);
@@ -617,7 +638,7 @@ function setDbAccess(username){
                             <span class='tname'>访问权限</span>\
                             <div class='info-r '>\
                                 <select class='bt-input-text mr5' name='dataAccess' style='width:100px'>\
-                                <option value='127.0.0.1'>本地服务器</option>\
+                                <option value='localhost'>本地服务器</option>\
                                 <option value=\"%\">所有人</option>\
                                 <option value='ip'>指定IP</option>\
                                 </select>\
@@ -625,9 +646,9 @@ function setDbAccess(username){
                         </div>\
                       </form>",
             success:function(){
-                if (rdata.msg == '127.0.0.1'){
-                    $('select[name="dataAccess"]').find("option[value='127.0.0.1']").attr("selected",true);
-                } else if (rdata.msg == '%'){
+                if (rdata.msg == 'localhost'){
+                    $('select[name="dataAccess"]').find("option[value='localhost']").attr("selected",true);
+                } else if (rdata.msg.indexOf("%") > -1){
                     $('select[name="dataAccess"]').find('option[value="%"]').attr("selected",true);
                 } else if ( rdata.msg == 'ip' ){
                     $('select[name="dataAccess"]').find('option[value="ip"]').attr("selected",true);
@@ -914,7 +935,7 @@ function delBackup(filename, name, path){
         path = "";
     }
     myPost('delete_db_backup',{filename:filename,path:path},function(){
-        layer.msg('执行成功!');
+        layer.msg(rdata.msg, { icon: rdata.status ? 1 : 2 });
         setTimeout(function(){
             setBackupReq(name);
         },2000);
@@ -931,12 +952,56 @@ function importBackup(file,name){
     });
 }
 
-
-function importDbExternal(file,name){
-    myPost('import_db_external',{file:file,name:name}, function(data){
-        layer.msg('执行成功!');
+function importBackupProgress(file,name){
+    myPost('import_db_backup_progress',{file:file,name:name}, function(data){
+        var rdata = $.parseJSON(data.data);
+        layer.open({
+            title: "手动导入命令CMD【显示进度】",
+            area: ['600px', '180px'],
+            type:1,
+            closeBtn: 1,
+            shadeClose: false,
+            btn:["复制","取消"],
+            content: '<div class="pd15">\
+                        <div class="divtable">\
+                            <pre class="layui-code">'+rdata.data+'</pre>\
+                        </div>\
+                    </div>',
+            success:function(){
+                copyText(rdata.data);
+            },
+            yes:function(){
+                copyText(rdata.data);
+            }
+        });
     });
 }
+
+function importDbProgress(file,name){
+    myPost('import_db_progress',{file:file,name:name}, function(data){
+        var rdata = $.parseJSON(data.data);
+        layer.open({
+            title: "手动导入命令CMD【显示进度】",
+            area: ['600px', '180px'],
+            type:1,
+            closeBtn: 1,
+            shadeClose: false,
+            btn:["复制","取消"],
+            content: '<div class="pd15">\
+                        <div class="divtable">\
+                            <pre class="layui-code">'+rdata.data+'</pre>\
+                        </div>\
+                    </div>',
+            success:function(){
+                copyText(rdata.data);
+            },
+            yes:function(){
+                copyText(rdata.data);
+            }
+        });
+    });
+}
+
 
 function importDbExternalProgress(file,name){
     myPost('import_db_external_progress',{file:file,name:name}, function(data){
@@ -1086,12 +1151,13 @@ function setBackup(db_name){
     var layerIndex = layer.open({
         type: 1,
         title: "数据库备份详情",
-        area: ['600px', '280px'],
+        area: ['700px', '280px'],
         closeBtn: 1,
         shadeClose: false,
         content: '<div class="pd15">\
                     <div class="db_list">\
                         <button id="btn_backup" class="btn btn-success btn-sm" type="button">备份</button>\
+                        <button id="btn_backup_reload" class="btn btn-success btn-sm" type="button">刷新</button>\
                         <button id="btn_local_import" class="btn btn-success btn-sm" type="button">外部导入</button>\
                     </div >\
                     <div class="divtable">\
@@ -1123,6 +1189,10 @@ function setBackup(db_name){
                 setLocalImport(db_name);
             });
 
+            $('#btn_backup_reload').click(function(){
+                setBackupReq(db_name);
+            });
+
             setBackupReq(db_name);
         },
     });
@@ -1140,6 +1210,7 @@ function setBackupReq(db_name, obj){
                     <td><span> ' + rdata.data[i]['time'] + '</span></td>\
                     <td style="text-align: right;">\
                         <a class="btlink" onclick="importBackup(\'' + rdata.data[i]['name'] + '\',\'' +db_name+ '\')">导入</a> | \
+                        <a class="btlink" onclick="importBackupProgress(\'' + rdata.data[i]['name'] + '\',\'' +db_name+ '\')">导入进度</a> | \
                         <a class="btlink" onclick="downloadBackup(\'' + rdata.data[i]['file'] + '\')">下载</a> | \
                         <a class="btlink" onclick="delBackup(\'' + rdata.data[i]['name'] + '\',\'' +db_name+ '\')">删除</a>\
                     </td>\
@@ -1732,7 +1803,7 @@ function getMasterRepSlaveUserCmd(username, db=''){
         
         var loadOpen = layer.open({
             type: 1,
-            title: '同步命令',
+            title: '同步命令[ 1-经典模式,2-GTID ]',
             area: '500px',
             content:"<form class='bt-form pd20 pb70' id='add_master'>\
             <div class='line' style='word-wrap: break-word;word-break: normal;'>"+cmd+"</div>\
@@ -1780,7 +1851,7 @@ function setDbMasterAccess(username){
                             <span class='tname'>访问权限</span>\
                             <div class='info-r '>\
                                 <select class='bt-input-text mr5' name='dataAccess' style='width:100px'>\
-                                <option value='127.0.0.1'>本地服务器</option>\
+                                <option value='localhost'>本地服务器</option>\
                                 <option value=\"%\">所有人</option>\
                                 <option value='ip'>指定IP</option>\
                                 </select>\
@@ -1788,9 +1859,9 @@ function setDbMasterAccess(username){
                         </div>\
                       </form>",
             success:function(){
-                if (rdata.msg == '127.0.0.1'){
-                    $('select[name="dataAccess"]').find("option[value='127.0.0.1']").attr("selected",true);
-                } else if (rdata.msg == '%'){
+                if (rdata.msg == 'localhost'){
+                    $('select[name="dataAccess"]').find("option[value='localhost']").attr("selected",true);
+                } else if (rdata.msg.indexOf("%") > -1 ){
                     $('select[name="dataAccess"]').find('option[value="%"]').attr("selected",true);
                 } else if ( rdata.msg == 'ip' ){
                     $('select[name="dataAccess"]').find('option[value="ip"]').attr("selected",true);
@@ -2899,8 +2970,10 @@ function masterOrSlaveConf(version=''){
                 getMasterDbList();
             }
             
-            getAsyncMasterDbList();
-            getAsyncDataList()
+            if (rdata.slave_status){
+                getAsyncMasterDbList();
+                getAsyncDataList()
+            }
         });
     }
     getMasterStatus();

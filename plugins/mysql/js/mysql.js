@@ -1,5 +1,5 @@
 
-function myPost(method,args,callback, title){
+function myPost(method, args,callback, title){
 
     var _args = null; 
     if (typeof(args) == 'string'){
@@ -135,6 +135,17 @@ function vaildPhpmyadmin(url,username,password){
     });
 }
 
+// InnoDB 缓冲池命中率 = (1 - 物理读 / 逻辑读请求) * 100
+// 计数器可能为 0、被重置或口径不一致(物理读大于逻辑请求), 此时不能输出 NaN / 负值
+function innodbHitRate(reads, readRequests) {
+    var r = parseFloat(reads);
+    var q = parseFloat(readRequests);
+    if (!isFinite(r) || !isFinite(q) || isNaN(r) || isNaN(q) || q <= 0 || r < 0 || r > q) {
+        return '无法评估';
+    }
+    return ((1 - r / q) * 100).toFixed(2) + '%';
+}
+
 function runInfo(){
     myPost('run_info','',function(data){
 
@@ -161,7 +172,7 @@ function runInfo(){
                         <tr><th>活动/峰值连接数</th><td>' + rdata.Threads_running + '/' + rdata.Max_used_connections + '</td><td colspan="2">若值过大,增加max_connections</td></tr>\
                         <tr><th>线程缓存命中率</th><td>' + ((1 - rdata.Threads_created / rdata.Connections) * 100).toFixed(2) + '%</td><td colspan="2">若过低,增加thread_cache_size</td></tr>\
                         <tr><th>索引命中率</th><td>' + ((1 - rdata.Key_reads / rdata.Key_read_requests) * 100).toFixed(2) + '%</td><td colspan="2">若过低,增加key_buffer_size</td></tr>\
-                        <tr><th>Innodb索引命中率</th><td>' + (rdata.Innodb_buffer_pool_read_requests / (rdata.Innodb_buffer_pool_read_requests+rdata.Innodb_buffer_pool_reads)).toFixed(2) + '%</td><td colspan="2">若过低,增加innodb_buffer_pool_size</td></tr>\
+                        <tr><th>Innodb索引命中率</th><td>' + innodbHitRate(rdata.Innodb_buffer_pool_reads, rdata.Innodb_buffer_pool_read_requests) + '</td><td colspan="2">若过低,增加innodb_buffer_pool_size</td></tr>\
                         <tr><th>查询缓存命中率</th><td>' + cache_size + '</td><td colspan="2">' + lan.soft.mysql_status_ps5 + '</td></tr>\
                         <tr><th>创建临时表到磁盘</th><td>' + ((rdata.Created_tmp_disk_tables / rdata.Created_tmp_tables) * 100).toFixed(2) + '%</td><td colspan="2">若过大,尝试增加tmp_table_size</td></tr>\
                         <tr><th>已打开的表</th><td>' + rdata.Open_tables + '</td><td colspan="2">若过大,增加table_cache_size</td></tr>\
@@ -363,7 +374,6 @@ function mySQLMemOpt(opt) {
             $("input[name='thread_stack']").val(256);
             $("input[name='binlog_cache_size']").val(32);
             $("input[name='thread_cache_size']").val(4);
-            $("input[name='table_open_cache']").val(32);
             $("input[name='max_connections']").val(500);
             break;
         case '1':
@@ -378,7 +388,6 @@ function mySQLMemOpt(opt) {
             $("input[name='thread_stack']").val(256);
             $("input[name='binlog_cache_size']").val(64);
             $("input[name='thread_cache_size']").val(64);
-            $("input[name='table_open_cache']").val(128);
             $("input[name='max_connections']").val(100);
             break;
         case '2':
@@ -393,7 +402,6 @@ function mySQLMemOpt(opt) {
             $("input[name='thread_stack']").val(256);
             $("input[name='binlog_cache_size']").val(64);
             $("input[name='thread_cache_size']").val(96);
-            $("input[name='table_open_cache']").val(192);
             $("input[name='max_connections']").val(200);
             break;
         case '3':
@@ -408,7 +416,6 @@ function mySQLMemOpt(opt) {
             $("input[name='thread_stack']").val(256);
             $("input[name='binlog_cache_size']").val(128);
             $("input[name='thread_cache_size']").val(128);
-            $("input[name='table_open_cache']").val(384);
             $("input[name='max_connections']").val(300);
             break;
         case '4':
@@ -423,7 +430,6 @@ function mySQLMemOpt(opt) {
             $("input[name='thread_stack']").val(384);
             $("input[name='binlog_cache_size']").val(192);
             $("input[name='thread_cache_size']").val(192);
-            $("input[name='table_open_cache']").val(1024);
             $("input[name='max_connections']").val(400);
             break;
         case '5':
@@ -438,7 +444,6 @@ function mySQLMemOpt(opt) {
             $("input[name='thread_stack']").val(512);
             $("input[name='binlog_cache_size']").val(256);
             $("input[name='thread_cache_size']").val(256);
-            $("input[name='table_open_cache']").val(2048);
             $("input[name='max_connections']").val(500);
             break;
         case '6':
@@ -453,7 +458,6 @@ function mySQLMemOpt(opt) {
             $("input[name='thread_stack']").val(1024);
             $("input[name='binlog_cache_size']").val(512);
             $("input[name='thread_cache_size']").val(512);
-            $("input[name='table_open_cache']").val(4096);
             $("input[name='max_connections']").val(1000);
             break;
         case '7':
@@ -468,7 +472,6 @@ function mySQLMemOpt(opt) {
             $("input[name='thread_stack']").val(2048);
             $("input[name='binlog_cache_size']").val(1024);
             $("input[name='thread_cache_size']").val(1024);
-            $("input[name='table_open_cache']").val(8192);
             $("input[name='max_connections']").val(2000);
             break;
     }
@@ -528,14 +531,14 @@ function setRootPwd(type, pwd){
             var rdata = $.parseJSON(data.data);
             showMsg(rdata.msg,function(){
                 dbList();
-            },{icon: rdata.status ? 1 : 2});   
+            },{icon: rdata.status ? 1 : 2});
         });
         return;
     }
 
     var index = layer.open({
         type: 1,
-        area: '800px',
+        area: '600px',
         title: '修改数据库密码',
         closeBtn: 1,
         shift: 5,
@@ -544,7 +547,7 @@ function setRootPwd(type, pwd){
         content: "<form class='bt-form pd20' id='mod_pwd'>\
                     <div class='line'>\
                         <span class='tname'>root密码</span>\
-                        <div class='info-r'><input class='bt-input-text mr5' type='text' name='password' id='MyPassword' style='width:630px' value='"+pwd+"' />\
+                        <div class='info-r'><input class='bt-input-text mr5' type='text' name='password' id='MyPassword' style='width:430px' value='"+pwd+"' />\
                             <span title='随机密码' class='glyphicon glyphicon-repeat cursor' onclick='repeatPwd(16)'></span>\
                         </div>\
                     </div>\
@@ -662,7 +665,7 @@ function setDbAccess(username){
                             <span class='tname'>访问权限</span>\
                             <div class='info-r '>\
                                 <select class='bt-input-text mr5' name='dataAccess' style='width:100px'>\
-                                <option value='127.0.0.1'>本地服务器</option>\
+                                <option value='localhost'>本地服务器</option>\
                                 <option value=\"%\">所有人</option>\
                                 <option value='ip'>指定IP</option>\
                                 </select>\
@@ -670,9 +673,9 @@ function setDbAccess(username){
                         </div>\
                       </form>",
             success:function(){
-                if (rdata.msg == '127.0.0.1'){
-                    $('select[name="dataAccess"]').find("option[value='127.0.0.1']").attr("selected",true);
-                } else if (rdata.msg == '%'){
+                if (rdata.msg == 'localhost'){
+                    $('select[name="dataAccess"]').find("option[value='localhost']").attr("selected",true);
+                } else if (rdata.msg.indexOf("%") > -1 ){
                     $('select[name="dataAccess"]').find('option[value="%"]').attr("selected",true);
                 } else if ( rdata.msg == 'ip' ){
                     $('select[name="dataAccess"]').find('option[value="ip"]').attr("selected",true);
@@ -959,7 +962,7 @@ function delBackup(filename, name, path){
         path = "";
     }
     myPost('delete_db_backup',{filename:filename,path:path},function(){
-        layer.msg('执行成功!');
+        layer.msg(rdata.msg, { icon: rdata.status ? 1 : 2 });
         setTimeout(function(){
             setBackupReq(name);
         },2000);
@@ -972,8 +975,8 @@ function downloadBackup(file){
 
 function importBackup(file,name){
     myPost('import_db_backup',{file:file,name:name}, function(data){
-        // console.log(data);
-        layer.msg('执行成功!');
+        var rdata = $.parseJSON(data.data);
+        layer.msg(rdata.msg, { icon: rdata.status ? 1 : 2 });
     });
 }
 
@@ -1001,7 +1004,6 @@ function importBackupProgress(file,name){
         });
     });
 }
-
 
 function importDbExternal(file,name){
     myPost('import_db_external',{file:file,name:name}, function(data){
@@ -1147,12 +1149,9 @@ function setLocalImport(db_name){
                 var upload_dir = $('input[name="upload_dir"]').val();
                 uploadDbFiles(upload_dir);
             });
-
             getList();
         },
     });
-
-    
 }
 
 function setBackup(db_name){
@@ -1165,6 +1164,7 @@ function setBackup(db_name){
         content: '<div class="pd15">\
                     <div class="db_list">\
                         <button id="btn_backup" class="btn btn-success btn-sm" type="button">备份</button>\
+                        <button id="btn_backup_reload" class="btn btn-success btn-sm" type="button">刷新</button>\
                         <button id="btn_local_import" class="btn btn-success btn-sm" type="button">外部导入</button>\
                     </div >\
                     <div class="divtable">\
@@ -1194,6 +1194,10 @@ function setBackup(db_name){
 
             $('#btn_local_import').click(function(){
                 setLocalImport(db_name);
+            });
+
+            $('#btn_backup_reload').click(function(){
+                setBackupReq(db_name);
             });
 
             setBackupReq(db_name);
@@ -1823,7 +1827,7 @@ function delMasterRepSlaveUser(username){
         var rdata = $.parseJSON(data.data);
         showMsg(rdata.msg, function(){
             getMasterRepSlaveList();
-        },{icon: rdata.status ? 1 : 2},1000)
+        },{icon: rdata.status ? 1 : 2},1000);
     });
 }
 
@@ -1849,7 +1853,7 @@ function setDbMasterAccess(username){
                             <span class='tname'>访问权限</span>\
                             <div class='info-r '>\
                                 <select class='bt-input-text mr5' name='dataAccess' style='width:100px'>\
-                                <option value='127.0.0.1'>本地服务器</option>\
+                                <option value='localhost'>本地服务器</option>\
                                 <option value=\"%\">所有人</option>\
                                 <option value='ip'>指定IP</option>\
                                 </select>\
@@ -1857,9 +1861,9 @@ function setDbMasterAccess(username){
                         </div>\
                       </form>",
             success:function(){
-                if (rdata.msg == '127.0.0.1'){
-                    $('select[name="dataAccess"]').find("option[value='127.0.0.1']").attr("selected",true);
-                } else if (rdata.msg == '%'){
+                if (rdata.msg == 'localhost'){
+                    $('select[name="dataAccess"]').find("option[value='localhost']").attr("selected",true);
+                } else if (rdata.msg.indexOf("%")>-1){
                     $('select[name="dataAccess"]').find('option[value="%"]').attr("selected",true);
                 } else if ( rdata.msg == 'ip' ){
                     $('select[name="dataAccess"]').find('option[value="ip"]').attr("selected",true);
@@ -2665,6 +2669,218 @@ function masterOrSlaveConf(version=''){
         });
     }
 
+    function mysqlSlaveSyncProgress(){
+        var html = '<div>';
+        html += '<div class="slave_sync_progress" id="slave_sync_progress" style="width:750px;height:350px;"></div>';
+        html += '<hr/><div class="slave_sync_info"></div>';
+        html += '</div>';
+        var timer = null;
+        var statEc = null;
+        layer.open({
+            type: 1,
+            title: "查看从库延迟进度",
+            area: ['800px', '500px'],
+            closeBtn: 1,
+            shadeClose: false,
+            content:'<div class="bt-form pd20">' + html + '</div>',
+            success:function(i,l){
+                // console.log(i,l);
+                statEc = echarts.init(document.getElementById('slave_sync_progress'));
+
+                var chat = {};
+                chat['tooltip'] = {
+                    show:true,
+                    trigger: 'axis',
+                    backgroundColor: 'rgba(255,255,255,0.8)',
+                    axisPointer: { 
+                        type: 'line',
+                        lineStyle: { color: 'rgba(150,150,150,0.2)'}
+                    },
+                    textStyle: {
+                        color: '#666',
+                        fontSize: '14px',
+                    },
+                }
+
+                var legend_name = ["延迟时间", "回放延迟", "GTID差值"];
+                var option = {
+                    title: { text: '延迟进度观察', left: 'center', textStyle: { fontSize: 16 } },
+                    tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
+                    backgroundColor:'#fff',
+                    legend:{
+                        data:legend_name,
+                        top:30,
+                    },
+                    xAxis: { type: 'category', boundaryGap: false, data: [],},
+                    yAxis: [
+                      { type: 'value', name: legend_name[0], position: 'left'},
+                      { type: 'value', name: legend_name[1], position: 'right'},
+                    ],
+                    series: [
+                        {
+                            name:legend_name[0],
+                            yAxisIndex: 0,
+                            data: [],
+                            type: 'line',
+                            smooth: true,
+                            showSymbol: false,
+                        },
+                        {
+                            name:legend_name[1],
+                            yAxisIndex: 0,
+                            data: [],
+                            type: 'line',
+                            smooth: true,
+                            showSymbol: false,
+                        },
+                        {
+                            name:legend_name[2],
+                            yAxisIndex: 1,
+                            data: [],
+                            type: 'bar',
+                            smooth: true,
+                            showSymbol: false,
+                        },
+                    ]
+                };
+                var xData = [];
+                var yData = [];
+                var pdData = [];
+                var gtidData = [];
+                statEc.setOption(option);
+
+                timer = setInterval(function(){
+                    myPostN('get_slave_list', {} ,function(rdata){
+                        if (!rdata.status){
+                            return;
+                        }
+                        var data = $.parseJSON(rdata.data);
+                        // console.log("dd:",data);
+                        // if (!data.status){
+                        //     return;
+                        // }
+                        // console.log("d2:",data.data);
+
+                        var real_data = data.data;
+                        var my_status = real_data[0];
+                        var req_time = data.time;
+                        var pd_data = my_status['Read_Master_Log_Pos'] - my_status['Exec_Master_Log_Pos'];
+                        var retrieved_gtid_backlog = 0;
+                        var executed_gtid_backlog = 0;
+                        var gtid_diff = 0;
+
+                        var seconds_behind_master = 0;
+                        if ('Seconds_Behind_Source' in my_status){
+                            seconds_behind_master = my_status["Seconds_Behind_Source"];
+                        } else {
+                            seconds_behind_master = my_status["Seconds_Behind_Master"];
+                        } 
+
+                        // 已拉取的GTID集合积压
+                        if (my_status['Retrieved_Gtid_Set'] != ''){
+                            var t = my_status['Retrieved_Gtid_Set'];
+                            t = t.split(":");
+                            t = t[1].split("-");
+                            console.log("retrieved_gtid_backlog:",t);
+                            retrieved_gtid_backlog = parseInt(t[1]) - parseInt(t[0]);
+                        }
+
+                        // 已执行的GTID集合积压
+                        if (my_status['Executed_Gtid_Set'] != ''){
+                            var t = my_status['Executed_Gtid_Set'];
+                            t = t.split(",");
+                            var vaild_exec_data = '';
+                            for (var i = 0; i < t.length; i++) {
+                                console.log("vaild_exec_data:"+i,t[i]);
+                                var tmp = t[i].split(":");
+                                var val = tmp[1].split("-");
+                                if (val[0] == "1"){
+                                    continue;
+                                }
+                                vaild_exec_data = t[i];
+                            }
+
+                            if (vaild_exec_data == ''){
+                                executed_gtid_backlog = 0;
+                            } else {
+                                var exec_data_list = vaild_exec_data.split(":");
+                                var start = exec_data_list[1].split("-")[0];
+                                var end = exec_data_list.at(-1).split("-")[1];
+                                if (!end){
+                                    end = exec_data_list[1].split("-")[1];
+                                }
+                                console.log("executed_gtid_backlog:",vaild_exec_data);
+                                console.log("executed_gtid_backlog:",start,end);
+                                executed_gtid_backlog = end - start;
+                            }
+                        }
+
+                        if(retrieved_gtid_backlog == 0){
+                            gtid_diff = 0;
+                        } else {
+                            gtid_diff = retrieved_gtid_backlog - executed_gtid_backlog;
+                        }
+                        console.log('gtid_diff:',gtid_diff,retrieved_gtid_backlog,executed_gtid_backlog);
+
+                        var last_time = parseTimeToSec(xData[xData.length - 1]);
+                        var last_gtid_diff = gtidData.length ? gtidData[gtidData.length - 1] : null;
+                        var now_time = parseTimeToSec(req_time);
+
+                        // 估算多久同步完:时间字符串不能直接相减,先转秒级时间戳
+                        var total_second = null;
+                        var exec_per_second = 0;
+                        if (last_time !== null && now_time !== null
+                            && last_gtid_diff !== null && now_time > last_time){
+                            var exec_per_second = (last_gtid_diff - gtid_diff) / (now_time - last_time);
+                            if (exec_per_second > 0){
+                                total_second = gtid_diff / exec_per_second;
+                            }
+                        }
+                        console.log("last_time:",last_time,"now_time:",now_time,"exec_per_second:",exec_per_second,"total_second:",total_second);
+
+                        xData.push(req_time);
+                        yData.push(seconds_behind_master);
+                        pdData.push(pd_data);
+                        gtidData.push(gtid_diff);
+                        
+
+                        if (xData.length > 20){
+                            xData.shift();
+                            yData.shift();
+                            pdData.shift();
+                            gtidData.shift();
+                        }
+
+                        statEc.setOption({
+                            xAxis: {
+                                data: xData
+                            },
+                            series: [
+                                { name: legend_name[0], data: yData},
+                                { name: legend_name[1], data: pdData},
+                                { name: legend_name[2], data: gtidData},
+                            ]
+                        });
+
+                        $('.slave_sync_info').text(
+                            'GTID积压: ' + gtid_diff
+                            + ' | 回放延迟: ' + pd_data + ' bytes'
+                            + ' | 秒级延迟: ' + seconds_behind_master
+                            + ' | GTID同步速度: ' + Math.floor(exec_per_second) + '/s'
+                            + ' | 预计同步完: ' + (gtid_diff <= 0 ? '已同步' : formatSecond(total_second))
+                        );
+                    });
+                },3000);
+            },
+            // 弹窗关闭后清理定时器与图表实例,避免重复打开产生多个定时器并访问已销毁实例
+            end:function(){
+                if (timer){ clearInterval(timer); timer = null; }
+                if (statEc){ statEc.dispose(); statEc = null; }
+            }
+        });
+
+    }
+
     function getAsyncMasterDbList(){
         var _data = {};
         if (typeof(page) =='undefined'){
@@ -2688,12 +2904,23 @@ function masterOrSlaveConf(version=''){
                 }
 
                 var status = "<a data-id="+i+"  class='btlink db_error'>异常</>";
-                if (mdb_ver >= 8){
-                    if (v['Replica_SQL_Running'] == 'Yes' && v['Replica_IO_Running'] == 'Yes'){
-                        status = "正常";
-                    }
 
-                    list += '<tr>';
+                var sql_io_status = false;
+                if (v['Replica_SQL_Running'] == 'Yes' && v['Replica_IO_Running'] == 'Yes'){
+                    sql_io_status = true;
+                }
+
+                if (v['Slave_SQL_Running'] == 'Yes' && v['Slave_IO_Running'] == 'Yes'){
+                    sql_io_status = true;
+                }
+
+                if (sql_io_status && rdata.data[i]['Seconds_Behind_Master'] < 5){
+                    status = "正常";
+                }
+
+
+                list += '<tr>';
+                if (mdb_ver >= 8){
                     list += '<td>' + rdata.data[i]['Source_Host'] +'</td>';
                     list += '<td>' + rdata.data[i]['Source_Port'] +'</td>';
                     list += '<td>' + rdata.data[i]['Source_User'] +'</td>';
@@ -2701,12 +2928,7 @@ function masterOrSlaveConf(version=''){
                     list += '<td>' + rdata.data[i]['Replica_IO_Running'] +'</td>';
                     list += '<td>' + rdata.data[i]['Replica_SQL_Running'] +'</td>';
 
-                } else {
-                    if (v['Slave_SQL_Running'] == 'Yes' && v['Slave_IO_Running'] == 'Yes'){
-                        status = "正常";
-                    }
-
-                    list += '<tr>';
+                } else {            
                     list += '<td>' + rdata.data[i]['Master_Host'] +'</td>';
                     list += '<td>' + rdata.data[i]['Master_Port'] +'</td>';
                     list += '<td>' + rdata.data[i]['Master_User'] +'</td>';
@@ -2714,6 +2936,18 @@ function masterOrSlaveConf(version=''){
                     list += '<td>' + rdata.data[i]['Slave_IO_Running'] +'</td>';
                     list += '<td>' + rdata.data[i]['Slave_SQL_Running'] +'</td>';
                 }
+
+                if (rdata.data[i]['Seconds_Behind_Master'] == 0 ){
+                    list += '<td>' + rdata.data[i]['Seconds_Behind_Master'] + '</td>';
+                }
+                else if (rdata.data[i]['Seconds_Behind_Source'] == 0){
+                    list += '<td>' + rdata.data[i]['Seconds_Behind_Source'] + '</td>';
+                } else {
+                    list += '<td>' + '<a href="javascript:;" class="btlink btn_delay_slave">' + rdata.data[i]['Seconds_Behind_Master'] +'</a></td>';
+                }
+                // list += '<td>' + '<a href="javascript:;" class="btlink btn_delay_slave">' + rdata.data[i]['Seconds_Behind_Master'] +'</a></td>';
+                
+
 
                 if (isHasSign){
                     list += '<td>' + v['Channel_Name'] +'</td>';
@@ -2741,6 +2975,7 @@ function masterOrSlaveConf(version=''){
                         <th>日志</th>\
                         <th>IO</th>\
                         <th>SQL</th>\
+                        <th>延迟</th>\
                         '+signThead_th+'\
                         <th>状态</th>\
                         <th style="text-align:right;">操作</th></tr></thead>\
@@ -2764,6 +2999,38 @@ function masterOrSlaveConf(version=''){
                 } else{
                     deleteSlave();
                 }
+            });
+
+            $(".btn_delay_slave").unbind('click').click(function(){
+
+                var html = '';
+                html += '<button class="btn btn-default btn-sm mysql_slave_sync_progress">查看从延迟进度</button>';
+                layer.open({
+                    type: 1,
+                    title: '延迟观察',
+                    area: '240px',
+                    content:'<div class="change-default pd20">'+html+'</div>',
+                    success:function(i,l){
+                        $('.mysql_slave_sync_progress').click(function(){
+                            mysqlSlaveSyncProgress();
+                        });
+                    }
+                });
+                // layer.open({
+                //     type: 1,
+                //     title: "观察",
+                //     area: ['150px', '150px'],
+                //     closeBtn: 1,
+                //     shadeClose: false,
+                //     content: '<div class="bt-form pd20">\
+                //         <button style="margin-bottom: 8px;" type="button" class="btn btn-default btn-sm mysql_slave_sync_progress">查看从延迟进度</button>\
+                //     </div>',
+                //     success:function(i,l){
+                //         $('.mysql_slave_sync_progress').click(function(){
+                //             mysqlSlaveSyncProgress();
+                //         });
+                //     }
+                // });
             });
 
              $('.db_error').click(function(){
@@ -2928,8 +3195,8 @@ function masterOrSlaveConf(version=''){
                 <p class="conf_p">\
                     <span class="f14 c6 mr20">Slave[从]配置</span><span class="f14 c6 mr20"></span>\
                     <button class="btn '+(!rdata.slave_status ? 'btn-danger' : 'btn-success')+' btn-xs btn-slave">'+(!rdata.slave_status ? '未启动' : '已启动') +'</button>\
-                    <button class="btn btn-success btn-xs" onclick="getSlaveCfg()" >同步配置</button>\
-                    <button class="btn btn-success btn-xs" onclick="initSlaveStatus()" >初始化</button>\
+                    <button class="btn btn-success btn-xs" onclick="getSlaveCfg()">同步配置</button>\
+                    <button class="btn btn-success btn-xs" onclick="initSlaveStatus()">初始化</button>\
                 </p>\
                 <hr/>\
                 <!-- slave status list -->\
@@ -3002,10 +3269,10 @@ function masterOrSlaveConf(version=''){
                 getMasterDbList();
             }
             
-            // if (rdata.slave_status){
+            if (rdata.slave_status){
                 getAsyncMasterDbList();
                 getAsyncDataList()
-            // }
+            }
         });
     }
     getMasterStatus();

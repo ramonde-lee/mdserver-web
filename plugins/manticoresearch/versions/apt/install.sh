@@ -14,6 +14,7 @@ if [ -f ${rootPath}/bin/activate ];then
 fi
 
 VERSION=$2
+action=$1
 
 Install_App()
 {
@@ -23,21 +24,23 @@ Install_App()
 	MC_DIR=${serverPath}/source/manticoresearch
 	mkdir -p $MC_DIR
 
+	# wget --no-check-certificate -O /www/server/source/manticoresearch/manticore-repo.noarch.deb https://repo.manticoresearch.com/manticore-repo.noarch.deb
+	# cd /www/server/source/manticoresearch/ && dpkg -i manticore-repo.noarch.deb
 	wget --no-check-certificate -O $MC_DIR/manticore-repo.noarch.deb https://repo.manticoresearch.com/manticore-repo.noarch.deb
 	dpkg -i $MC_DIR/manticore-repo.noarch.deb
-	apt update -y 
-	apt -y install manticore manticore-extra
 
+	apt -y install manticore
+	apt -y install manticore-extra
+	apt -y upgrade manticore
 
 	echo "${VERSION}" > $serverPath/manticoresearch/version.pl
-
 
 	cd ${rootPath} && python3 plugins/manticoresearch/index.py start ${VERSION}
 	cd ${rootPath} && python3 plugins/manticoresearch/index.py initd_install ${VERSION}
 
-	if [ -d ${MC_DIR} ];then
-		rm -rf ${MC_DIR}
-	fi
+	# if [ -d ${MC_DIR} ];then
+	# 	rm -rf ${MC_DIR}
+	# fi
 }
 
 Uninstall_App()
@@ -45,7 +48,8 @@ Uninstall_App()
 	cd ${rootPath} && python3 plugins/manticoresearch/index.py stop ${VERSION}
 	cd ${rootPath} && python3 plugins/manticoresearch/index.py initd_uninstall ${VERSION}
 
-	apt -y remove manticore manticore-extra
+	apt -y remove manticore
+	apt -y remove manticore-extra
 	apt -y autoremove
 
 	if [ -d $serverPath/manticoresearch ];then
@@ -63,9 +67,11 @@ Uninstall_App()
 	echo "卸载manticoresearch成功"
 }
 
-action=$1
-if [ "${1}" = 'install' ];then
+
+if [ "${1}" = 'install' ] || [ "$action" = "upgrade" ];then
 	Install_App
-else
+elif [ "${1}" = 'uninstall' ];then
 	Uninstall_App
+else
+	echo "OPTIONS ERROR"
 fi

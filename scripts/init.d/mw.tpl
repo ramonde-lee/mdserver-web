@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # chkconfig: 2345 55 25
 # description: MW Cloud Service
 
@@ -53,11 +53,15 @@ mw_start_panel()
         do
             echo -e ".\c"
             sleep 0.5
-            # isStart=$(lsof -n -P -i:$port|grep LISTEN|grep -v grep|awk '{print $2}'|xargs)
-            isStart=$(ss -tulnp | grep ":$port" |grep LISTEN|grep -v grep|awk '{print $2}'|xargs)
-            if [[ "$isStart" == "" ]];then
+
+            if command -v ss >/dev/null 2>&1;then
+                isStart=$(ss -tulnp | grep ":$port" |grep LISTEN|grep -v grep|awk '{print $2}'|xargs)
+            elif command -v lsof >/dev/null 2>&1;then
+                isStart=$(lsof -n -P -i:$port|grep LISTEN|grep -v grep|awk '{print $2}'|xargs)
+            else
                 isStart=$(ps -ef|grep python3|grep mdserver-web|grep app:app|awk '{print $2}'|xargs)
             fi
+            
             let n+=1
             if [ $n -gt 60 ];then
                 break;
@@ -122,7 +126,8 @@ mw_stop_task()
         kill -9 $p  > /dev/null 2>&1
     done
 
-    zzpids=$(ps -A -o stat,ppid,pid,cmd | grep -e '^[Zz]' | awk '{print $2}')
+    # linux  | ps -A -o stat,ppid,pid,cmd 
+    zzpids=$(ps -A -o stat,ppid,pid | grep -e '^[Zz]' | awk '{print $2}')
     zzpids=($zzpids)
     for p in ${zzpids[@]}
     do
@@ -517,6 +522,14 @@ mw_connect_mysql(){
         DB_TYPE["mysql-community"]="mysql-community"
     fi
 
+    if [ -d "${ROOT_PATH}/postgresql" ];then
+        DB_TYPE["postgresql"]="postgresql"
+    fi
+
+    if [ -d "${ROOT_PATH}/mongodb" ];then
+        DB_TYPE["mongodb"]="mongodb"
+    fi
+
     SOURCE_LIST_KEY_SORT_TMP=$(echo ${!DB_TYPE[@]} | tr ' ' '\n' | sort -n)
     SOURCE_LIST_KEY=(${SOURCE_LIST_KEY_SORT_TMP//'\n'/})
     SOURCE_LIST_LEN=${#DB_TYPE[*]}
@@ -573,8 +586,19 @@ mw_connect_mysql(){
     if [ "$CHOICE_DB" == "mysql-yum" ];then
         ${ROOT_PATH}/mysql-yum/bin/usr/bin/mysql -S ${ROOT_PATH}/mysql-yum/mysql.sock -uroot -p"${pwd}"
     fi
-}
 
+    if [ "$CHOICE_DB" == "mysql-yum" ];then
+        ${ROOT_PATH}/mysql-yum/bin/usr/bin/mysql -S ${ROOT_PATH}/mysql-yum/mysql.sock -uroot -p"${pwd}"
+    fi
+
+    if [ "$CHOICE_DB" == "postgresql" ];then
+        mw_connect_pgdb
+    fi
+
+    if [ "$CHOICE_DB" == "mongodb" ];then
+        mw_mongodb
+    fi
+}
 
 mw_connect_pgdb(){
     if [ ! -d "${ROOT_PATH}/postgresql" ];then
@@ -582,13 +606,12 @@ mw_connect_pgdb(){
         exit 1
     fi
 
-
     pwd=$(cd ${PANEL_DIR} && python3 ${PANEL_DIR}/plugins/postgresql/index.py root_pwd)
     export PGPASSWORD=${pwd}
     echo "${ROOT_PATH}/postgresql/bin/psql -U postgres -W"
+    echo "${ROOT_PATH}/postgresql/bin/psql -h 127.0.0.1 -U postgres -W"
     ${ROOT_PATH}/postgresql/bin/psql -U postgres -W
 }
-
 
 mw_mongodb(){
     # /www/server/mongodb/bin/mongo --version
@@ -666,7 +689,8 @@ mw_ssh(){
         # echo "info:$SSS"
         # SSS="127.0.0.1|22|root|xx"
         IFS='|' read -r SERVER_IP SERVER_PORT SERVER_USER SERVER_PASS <<< "$SSS"
-        echo "Attempting SSH connection to $SERVER_USER@$SERVER_IP:$SERVER_PORT"
+        echo "Attempting SSH connection to $SERVER_USER@$SERVER_IP -p $SERVER_PORT"
+        # echo "sshpass -p \"$SERVER_PASS\" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -p \"$SERVER_PORT\" \"$SERVER_USER@$SERVER_IP\""
         sshpass -p "$SERVER_PASS" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -p "$SERVER_PORT" "$SERVER_USER@$SERVER_IP"
     fi
 }
@@ -757,6 +781,15 @@ mw_default(){
     echo -e "$address"
     echo -e `cd ${PANEL_DIR} && python3 ${PANEL_DIR}/panel_tools.py username`
     echo -e `cd ${PANEL_DIR} && python3 ${PANEL_DIR}/panel_tools.py password`
+    echo -e "=================================================================="
+
+    pid_file=${PANEL_DIR}/logs/panel.pid
+    if [ -f $pid_file ];then
+        echo -e "-------------------------[\033[32mPANEL RUNNING\033[0m]--------------------------"
+    else
+        echo -e "---------------------------[\033[31mPANEL STOP\033[0m]---------------------------"
+    fi
+    echo -e "=================================================================="
     echo -e "\033[33mWarning:\033[0m"
     echo -e "\033[33mIf you cannot access the panel. \033[0m"
     echo -e "\033[33mrelease the following port (${show_panel_ip}80|443|22) in the security group.\033[0m"

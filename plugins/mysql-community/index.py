@@ -80,13 +80,17 @@ def getBackupDir():
         mw.execShell("mkdir -p {}".format(bk_path))
     return bk_path
 
+def getImportDir():
+    import_path = mw.getBackupDir() + "/import"
+    if not os.path.isdir(import_path):
+        mw.execShell("mkdir -p {}".format(import_path))
+    return import_path
 
 def checkArgs(data, ck=[]):
     for i in range(len(ck)):
         if not ck[i] in data:
             return (False, mw.returnJson(False, '参数:(' + ck[i] + ')没有!'))
     return (True, mw.returnJson(True, 'ok'))
-
 
 def getConf():
     path = getServerDir() + '/etc/my.cnf'
@@ -139,6 +143,12 @@ def getAuthPolicy():
     # caching_sha2_password
     return 'mysql_native_password'
     
+def getInitdTpl(version=''):
+    path = getPluginDir() + '/init.d/mysql' + version + '.tpl'
+    if not os.path.exists(path):
+        path = getPluginDir() + '/init.d/mysql.tpl'
+    return path
+
 def contentReplace(content):
     service_path = mw.getServerDir()
     content = content.replace('{$ROOT_PATH}', mw.getFatherDir())
@@ -247,6 +257,19 @@ def initDreplace(version=''):
 
     if mw.getOs() != 'darwin':
         mw.execShell('chown -R mysql mysql ' + getServerDir())
+
+    if mw.isAppleSystem():
+        initd_path = getServerDir() + '/init.d'
+        if not os.path.exists(initd_path):
+            os.mkdir(initd_path)
+
+        file_bin = initd_path + '/' + getPluginName()
+        if not os.path.exists(file_bin):
+            initd_tpl = getInitdTpl(version)
+            content = mw.readFile(initd_tpl)
+            content = contentReplace(content)
+            mw.writeFile(file_bin, content)
+            mw.execShell('chmod +x ' + file_bin)
     return 'ok'
 
 def process_status():
@@ -415,11 +438,25 @@ def getShowLogFile():
     return tmp.groups()[0].strip()
 
 def getMdb8Ver():
-    return ['8.0','8.1','8.2','8.3','8.4','9.0','9.1', '9.2', '9.3', '9.4']
+    return ['8.0','8.1','8.2','8.3','8.4','9.0','9.1', '9.2', '9.3', '9.4','9.7','26.7','26.10']
 
 def getSlaveName():
     mdb8 = getMdb8Ver()
+
+    version = "5.6"
+    version_pl = getServerDir() + "/version.pl"
+    if os.path.exists(version_pl):
+        version = mw.readFile(version_pl).strip()
+        
     if mw.inArray(mdb8, version):
+        return 'replica'
+    return 'slave'
+
+
+def getSlaveNameByVer(version=''):
+    # 与 getSlaveName 相同, 但使用显式传入的版本, 避免依赖全局 version
+    # MySQL 8.4 起 SLAVE 相关语句已移除, 只能用 REPLICA
+    if mw.inArray(getMdb8Ver(), version):
         return 'replica'
     return 'slave'
 
@@ -532,7 +569,14 @@ def my8cmd(version, method):
     initDreplace(version)
     # mysql 8.0  and 5.7
     mdb8 = getMdb8Ver()
+
+    init_file = ""
+    if mw.isAppleSystem():
+        initd_path = getServerDir() + '/init.d'
+        init_file = initd_path + '/' + getPluginName()
+
     try:
+
         isInited = True
         if mw.inArray(mdb8, version):
             isInited = initMysql8Data()
@@ -565,6 +609,7 @@ def my8cmd(version, method):
                 mw.execShell('systemctl stop ' + getPluginName())
 
         if not mw.isSupportSystemctl():
+            cmd = init_file + ' ' + method
             sub = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True,
                                    bufsize=4096, stderr=subprocess.PIPE)
             sub.wait(5)
@@ -588,6 +633,13 @@ def stop(version=''):
 
 
 def restart(version=''):
+    slow_log = getShowLogFile()
+    if os.path.exists(slow_log):
+        mw.writeFile(slow_log, '')
+
+    error_log = getErrorLogsFile()
+    if os.path.exists(error_log):
+        mw.writeFile(error_log, '')
     return appCMD(version, 'restart')
 
 
@@ -703,7 +755,10 @@ def runInfo(version):
         return mw.returnJson(False, 'MySQL未启动', [])
 
     db = pMysqlDb()
-    data = db.query('show global status')
+    try:
+        data = db.query('show global status')
+    except Exception as e:
+        data = e
     isError = isSqlError(data)
     if isError != None:
         return isError
@@ -723,8 +778,11 @@ def runInfo(version):
 
     # print(result, int(result['Uptime']))
     result['Run'] = int(time.time()) - int(result['Uptime'])
-    tmp = db.query('show master status')
+    cmd_status = 'show master status'
+    if pk_version.parse(version) > pk_version.parse("8.0"):
+        cmd_status = 'SHOW BINARY LOG STATUS'
     try:
+        tmp = db.query(cmd_status)
         result['File'] = tmp[0]["File"]
         result['Position'] = tmp[0]["Position"]
     except:
@@ -736,7 +794,10 @@ def runInfo(version):
 def myDbStatus(version):
     result = {}
     db = pMysqlDb()
-    data = db.query('show variables')
+    try:
+        data = db.query('show variables')
+    except Exception as e:
+        data = e
     isError = isSqlError(data)
     if isError != None:
         return isError
@@ -812,26 +873,108 @@ def isSqlError(mysqlMsg):
     return None
 
 
+def getMysqlServerVersion(pdb):
+    # 获取服务端版本号, 如 8.0.36 / 8.4.2 / 10.6.16-MariaDB
+    try:
+        rows = pdb.query('select version() as v')
+        if rows:
+            return str(rows[0].get('v') or '')
+    except Exception:
+        pass
+    return ''
+
+
+def executeResetMaster(pdb, version=''):
+    # 重置 binlog 与 GTID
+    # MySQL 8.4 起移除了 RESET MASTER, 改用 RESET BINARY LOGS AND GTIDS
+    # 返回 None 表示成功, 否则返回错误信息字符串
+    ver = version or getMysqlServerVersion(pdb)
+    major = 0
+    minor = 0
+    m = re.search(r'(\d+)\.(\d+)', ver)
+    if m:
+        major, minor = int(m.group(1)), int(m.group(2))
+
+    is_mariadb = 'mariadb' in ver.lower()
+    if is_mariadb or major < 8 or (major == 8 and minor < 4):
+        # MySQL 5.x / 8.0 / MariaDB
+        sql_list = ['reset master', 'reset binary logs and gtids']
+    else:
+        # MySQL 8.4+ / 9.x
+        sql_list = ['reset binary logs and gtids', 'reset master']
+
+    last_err = ''
+    for sql in sql_list:
+        try:
+            pdb.execute(sql)
+            return None
+        except Exception as e:
+            last_err = str(e)
+            # 仅语法错误(1064)或未知语句(1065)时才尝试另一种写法
+            if '1064' not in last_err and '1065' not in last_err:
+                break
+    return last_err
+
+
+def setGtidModeStepwise(db, target):
+    # GTID_MODE 只能逐级切换: OFF <-> OFF_PERMISSIVE <-> ON_PERMISSIVE <-> ON
+    # 先读当前实际值, 再从当前状态逐级走到目标值, 避免 1788 错误
+    order = ['OFF', 'OFF_PERMISSIVE', 'ON_PERMISSIVE', 'ON']
+    try:
+        rows = db.query('select @@global.gtid_mode as v')
+        cur = str(rows[0].get('v') or 'OFF').upper() if rows else 'OFF'
+    except Exception:
+        cur = 'OFF'
+    if cur not in order:
+        cur = 'OFF'
+
+    if target == 'ON':
+        # 开启前必须先打开 enforce_gtid_consistency
+        db.query('set global enforce_gtid_consistency=on')
+
+    i = order.index(cur)
+    t = order.index(target)
+    step = 1 if t > i else -1
+    while i != t:
+        i += step
+        db.query('set global gtid_mode=' + order[i].lower())
+
+    if target == 'OFF':
+        # 到达 OFF 后才能关闭 enforce_gtid_consistency
+        db.query('set global enforce_gtid_consistency=off')
+
+
 def __createUser(dbname, username, password, address):
     pdb = pMysqlDb()
 
-    if username == 'root':
-        dbname = '*'
+    try:
+        pdb.execute("CREATE USER `%s`@`localhost` IDENTIFIED BY '%s'" % (username, password))
+    except Exception as e:
+        pass
 
-    pdb.execute(
-        "CREATE USER `%s`@`localhost` IDENTIFIED BY '%s'" % (username, password))
-    pdb.execute(
-        "grant all privileges on %s.* to `%s`@`localhost`" % (dbname, username))
+    try:
+        pdb.execute("grant all privileges on %s.* to `%s`@`localhost`" % (dbname, username))
+    except Exception as e:
+        pass
+    
     for a in address.split(','):
-        pdb.execute(
-            "CREATE USER `%s`@`%s` IDENTIFIED BY '%s'" % (username, a, password))
-        pdb.execute(
-            "grant all privileges on %s.* to `%s`@`%s`" % (dbname, username, a))
-    pdb.execute("flush privileges")
+
+        try:
+            pdb.execute("CREATE USER `%s`@`%s` IDENTIFIED BY '%s'" % (username, a, password))
+        except Exception as e:
+            pass
+
+        try:
+            pdb.execute("grant all privileges on %s.* to `%s`@`%s`" % (dbname, username, a))
+        except Exception as e:
+            pass
+    try:
+        pdb.execute("flush privileges")
+    except Exception as e:
+        pass
 
 
 def getDbBackupListFunc(dbname=''):
-
     bkDir = getBackupDir()
     if not os.path.exists(bkDir):
         os.mkdir(bkDir)
@@ -854,8 +997,9 @@ def setDbBackup():
     if not data[0]:
         return data[1]
 
-    scDir = getPluginDir() + '/scripts/backup.py'
-    cmd = 'python3 ' + scDir + ' database ' + args['name'] + ' 3'
+    head = "cd "+mw.getPanelDir()
+    cmd = head +' && . bin/activate &&  python3 plugins/mysql-community/scripts/backup.py database ' + args['name'] + ' 3'
+    # print(cmd)
     os.system(cmd)
     return mw.returnJson(True, 'ok')
 
@@ -942,7 +1086,7 @@ def importDbExternalProgress():
     name = args['name']
 
     cmd = 'cd '+mw.getServerDir()+'/mdserver-web && . bin/activate && '
-    cmd += 'python3 '+mw.getServerDir()+'/mdserver-web/plugins/mysql-community/index.py import_db_external_progress_bar  {"file":"'+file+'","name":"'+name+'"}'
+    cmd += 'python3 plugins/mysql-community/index.py import_db_external_progress_bar  {"file":"'+file+'","name":"'+name+'"}'
     return mw.returnJson(True, 'ok',cmd)
 
 def importDbExternalProgressBar():
@@ -1020,11 +1164,11 @@ def importDbBackup():
     file = args['file']
     name = args['name']
 
-    file_path = mw.getBackupDir() + '/database/' + file
-    file_path_sql = mw.getBackupDir() + '/database/' + file.replace('.gz', '')
+    file_path = getBackupDir() + '/' + file
+    file_path_sql = getBackupDir() + '/' + file.replace('.gz', '')
 
     if not os.path.exists(file_path_sql):
-        cmd = 'cd ' + mw.getBackupDir() + '/database && gzip -d ' + file
+        cmd = 'cd ' + getBackupDir() + '/ && gzip -d ' + file
         mw.execShell(cmd)
 
     pwd = pSqliteDb('config').where('id=?', (1,)).getField('mysql_root')
@@ -1041,6 +1185,53 @@ def importDbBackup():
 
     return mw.returnJson(True, 'ok')
 
+def importDbBackupProgress():
+    args = getArgs()
+    data = checkArgs(args, ['file', 'name'])
+    if not data[0]:
+        return data[1]
+
+    file = args['file']
+    name = args['name']
+
+    cmd = 'cd ' + mw.getServerDir() + '/mdserver-web && . bin/activate && '
+    cmd += 'python3 plugins/mysql-community/index.py import_db_backup_progress_bar {"file":"'+file+'","name":"'+name+'"}'
+    return mw.returnJson(True, 'ok',cmd)
+    # return mw.returnJson(True, 'ok')
+
+def importDbBackupProgressBar():
+    args = getArgs()
+    data = checkArgs(args, ['file', 'name'])
+    if not data[0]:
+        return data[1]
+
+    file = args['file']
+    name = args['name']
+
+    file_path = getBackupDir() + '/' + file
+    file_path_sql = getBackupDir() + '/' + file.replace('.gz', '')
+
+    if not os.path.exists(file_path_sql):
+        cmd = 'cd ' + getBackupDir() + ' && gzip -dk ' + file
+        mw.execShell(cmd)
+
+    local_mode = recognizeDbMode()
+    if local_mode == 'gtid':
+        pdb = pMysqlDb()
+        reset_err = executeResetMaster(pdb)
+        if reset_err:
+            print('重置master失败: ' + reset_err)
+
+    pwd = pSqliteDb('config').where('id=?', (1,)).getField('mysql_root')
+    sock = getSocketFile()
+
+    mysql_cmd = getServerDir() + '/bin/mysql -S ' + sock + ' -uroot -p"' + pwd + \
+        '" ' + name
+    mysql_cmd_progress_bar = "pv -t -p " + file_path_sql + '|'+ mysql_cmd
+    print(mysql_cmd_progress_bar)
+    rdata = os.system(mysql_cmd_progress_bar)
+    return ''
+
 
 def deleteDbBackup():
     args = getArgs()
@@ -1055,7 +1246,7 @@ def deleteDbBackup():
     if path != "":
         full_file = path + "/" + args['filename']
     os.remove(full_file)
-    return mw.returnJson(True, 'ok')
+    return mw.returnJson(True, '删除成功!')
 
 
 def getDbBackupList():
@@ -1083,6 +1274,7 @@ def getDbBackupList():
 
         data['file'] = p
 
+    rr.sort(key=lambda x: x['time'], reverse=True)
     return mw.returnJson(True, 'ok', rr)
 
 
@@ -1166,16 +1358,44 @@ def getDbList():
 
     return mw.getJson(data)
 
+def getTableList():
+    args = getArgs()
+    db_name = ""
+    if 'dbname' in args:
+        db_name = args['dbname']
+    if db_name == "":
+        return mw.returnJson(-1,"table表不能为空")
+
+    pdb = pMysqlDb()
+    sql = 'show tables from `%s`' % db_name
+    try:
+        data = pdb.query(sql)
+    except Exception as e:
+        return mw.returnJson(-1, str(e))
+
+    table_list = []
+    key = "Tables_in_%s" % db_name
+    for i in data:
+        table_list.append(i[key])
+
+    return mw.returnJson(0,"ok", table_list)
+
 
 def syncGetDatabases():
     pdb = pMysqlDb()
     psdb = pSqliteDb('databases')
-    data = pdb.query('show databases')
+    try:
+        data = pdb.query('show databases')
+    except Exception as e:
+        return mw.returnJson(-1, str(e))
     isError = isSqlError(data)
     if isError != None:
         return isError
-    users = pdb.query(
-        "select User,Host from mysql.user where User!='root' AND Host!='localhost' AND Host!=''")
+    try:
+        users = pdb.query(
+            "select User,Host from mysql.user where User!='root' AND Host!='localhost' AND Host!=''")
+    except Exception:
+        users = []
     nameArr = ['information_schema', 'performance_schema', 'mysql', 'sys']
     n = 0
 
@@ -1214,18 +1434,24 @@ def toDbBase(find):
     if len(find['password']) < 3:
         find['username'] = find['name']
         find['password'] = mw.md5(str(time.time()) + find['name'])[0:10]
-        psdb.where("id=?", (find['id'],)).save(
-            'password,username', (find['password'], find['username']))
+        psdb.where("id=?", (find['id'],)).save('password,username', (find['password'], find['username']))
 
-    result = pdb.execute("create database `" + find['name'] + "`")
-    if "using password:" in str(result):
-        return -1
-    if "Connection refused" in str(result):
-        return -1
+    result = pdb.query("show databases")
+    db_name = []
+    for db_info in result:
+        db_name.append(db_info['Database'])
 
-    password = find['password']
-    __createUser(find['name'], find['username'], password, find['accept'])
-    return 1
+    if not mw.inArray(db_name, find['name']):
+        try:
+            result = pdb.execute("create database `" + find['name'] + "`")
+        except Exception as e:
+            pass
+
+    access_list = getDbUserAccess(find['name'])
+    if len(access_list) < 1:
+        __createUser(find['name'], find['username'], find['password'], find['accept'])
+        return 1
+    return 0
 
 
 def syncToDatabases():
@@ -1235,7 +1461,10 @@ def syncToDatabases():
         return data[1]
 
     pdb = pMysqlDb()
-    result = pdb.execute("show databases")
+    try:
+        result = pdb.execute("show databases")
+    except Exception as e:
+        result = e
     isError = isSqlError(result)
     if isError:
         return isError
@@ -1253,9 +1482,7 @@ def syncToDatabases():
     else:
         data = json.loads(args['ids'])
         for value in data:
-            find = psdb.where("id=?", (value,)).field(
-                'id,name,username,password,accept').find()
-            # print find
+            find = psdb.where("id=?", (value,)).field('id,name,username,password,accept').find()
             result = toDbBase(find)
             if result == 1:
                 n += 1
@@ -1269,39 +1496,58 @@ def setRootPwd(version=''):
     if not data[0]:
         return data[1]
 
+    password = args['password']
+
     #强制修改
     force = 0
     if 'force' in args and args['force'] == '1':
-        force = 1
+        pSqliteDb('config').where('id=?', (1,)).save('mysql_root', (password,))
+        return mw.returnJson(True, '【强制本地记录】数据库root密码修改成功(立马检查)!')
 
-    password = args['password']
+    if 'force' in args and args['force'] == '2':
+        force = 2
+        ok = setRootPwdForce(password,version)
+        if not ok:
+            return mw.returnJson(False, '【强制】修改失败,请检查MySQL运行状态!')
+
+        pSqliteDb('config').where('id=?', (1,)).save('mysql_root', (password,))
+        if ok and version.startswith("8"):
+            pdb = pMysqlDb()
+            try:
+                pdb.query("SET GLOBAL validate_password.policy=MEDIUM;")
+            except Exception:
+                pass
+        return mw.returnJson(True, '【强制】数据库root密码修改成功!')
+
     try:
         pdb = pMysqlDb()
         result = pdb.query("show databases")
         isError = isSqlError(result)
         if isError != None:
-            if force == 1:
-                pSqliteDb('config').where('id=?', (1,)).save('mysql_root', (password,))
-                return mw.returnJson(True, '【强制修改】数据库root密码修改成功(不意为成功连接数据)!')
             return isError
 
-        if version.find('5.7') > -1 or version.find('8.0') > -1:
-            pdb.execute(
-                "UPDATE mysql.user SET authentication_string='' WHERE user='root'")
-            pdb.execute(
-                "ALTER USER 'root'@'localhost' IDENTIFIED BY '%s'" % password)
-            pdb.execute(
-                "ALTER USER 'root'@'127.0.0.1' IDENTIFIED BY '%s'" % password)
+        if version.find('5.7') > -1 or mw.inArray(getMdb8Ver(), version):
+            try:
+                rows = pdb.query("select host from mysql.user where user='root'")
+                hosts = [str(r['host']) for r in rows if 'host' in r]
+            except Exception:
+                hosts = []
+            if len(hosts) == 0:
+                hosts = ['localhost', '127.0.0.1']
+            for h in hosts:
+                try:
+                    pdb.execute("ALTER USER 'root'@'%s' IDENTIFIED BY '%s'" % (h, password))
+                except Exception as e:
+                    pass
         else:
-            result = pdb.execute(
-                "update mysql.user set Password=password('" + password + "') where User='root'")
-        pdb.execute("flush privileges")
-        pSqliteDb('config').where('id=?', (1,)).save('mysql_root', (password,))
+            try:
+                pdb.execute("update mysql.user set Password=password('" + password + "') where User='root'")
+            except Exception as e:
+                pass
 
-        msg = ''
-        if force == 1:
-            msg = ',无须强制!'
-        return mw.returnJson(True, '数据库root密码修改成功!'+msg)
+        pSqliteDb('config').where('id=?', (1,)).save('mysql_root', (password,))
+        
+        return mw.returnJson(True, '数据库root密码修改成功!')
     except Exception as ex:
         return mw.returnJson(False, '修改错误:' + str(ex))
 
@@ -1319,7 +1565,7 @@ def setUserPwd(version=''):
         psdb = pSqliteDb('databases')
         name = psdb.where('id=?', (uid,)).getField('name')
 
-        if version.find('5.7') > -1 or version.find('8.0') > -1:
+        if version.find('5.7') > -1 or mw.inArray(getMdb8Ver(), version):
             accept = pdb.query(
                 "select Host from mysql.user where User='" + name + "' AND Host!='localhost'")
             t1 = pdb.execute(
@@ -1405,16 +1651,22 @@ def addDb():
     if psdb.where("name=? or username=?", (dbname, dbuser)).count():
         return mw.returnJson(False, '数据库已存在!')
 
-    result = pdb.execute("create database `" + dbname +
-                         "` DEFAULT CHARACTER SET " + codeing + " COLLATE " + codeStr)
+    try:
+        result = pdb.execute("create database `" + dbname +
+                             "` DEFAULT CHARACTER SET " + codeing + " COLLATE " + codeStr)
+    except Exception as e:
+        result = e
     # print result
     isError = isSqlError(result)
     if isError != None:
         return isError
 
-    pdb.execute("drop user '" + dbuser + "'@'localhost'")
-    for a in address.split(','):
-        pdb.execute("drop user '" + dbuser + "'@'" + a + "'")
+    db_users_access = getDbUserAccess(dbuser)
+    for user_access in db_users_access:
+        try:
+            pdb.execute("drop user `%s`@'%s'" % (db_user, user_access))
+        except Exception:
+            pass
 
     __createUser(dbname, dbuser, password, address)
 
@@ -1439,14 +1691,18 @@ def delDb():
         accept = find['accept']
         username = find['username']
 
-        # 删除MYSQL
-        result = pdb.execute("drop database `" + name + "`")
+        # 删除MYSQL(库或用户可能已不存在,失败忽略,保证面板记录可删除)
+        try:
+            pdb.execute("drop database `" + name + "`")
+        except Exception:
+            pass
 
-        users = pdb.query("select Host from mysql.user where User='" +
-                          username + "' AND Host!='localhost'")
-        pdb.execute("drop user '" + username + "'@'localhost'")
-        for us in users:
-            pdb.execute("drop user '" + username + "'@'" + us["Host"] + "'")
+        db_users_access = getDbUserAccess(username)
+        for user_access in db_users_access:
+            try:
+                pdb.execute("drop user '" + username + "'@'%s'" % (user_access,))
+            except Exception:
+                pass
         pdb.execute("flush privileges")
 
         # 删除SQLITE
@@ -1456,28 +1712,110 @@ def delDb():
         return mw.returnJson(False, '删除失败!' + str(ex))
 
 
+def getDbUserAccess(username):
+    pdb = pMysqlDb()
+    accs = []
+    try:
+        users = pdb.query("select Host from mysql.user where User='" + username + "'")
+    except Exception as e:
+        return accs
+    for c in users:
+        accs.append(c["Host"])
+    return accs
+
+def getDbUserAccessDiff(db_access, input_access):
+    add = []
+    delete = []
+
+    host_var = 'localhost'
+    local_ipvar = '127.0.0.1'
+    local_ip6var = '::1'
+
+    for ac in input_access:
+        if ac == host_var:
+            continue
+        if ac == local_ipvar:
+            continue
+        if ac == local_ip6var:
+            continue
+        if mw.inArray(db_access,ac):
+            continue
+        add.append(ac)
+
+    if not mw.inArray(db_access, local_ipvar) and not mw.inArray(add, local_ipvar):
+        add.append(local_ipvar)
+
+    if not mw.inArray(db_access, local_ip6var) and not mw.inArray(add, local_ip6var):
+        add.append(local_ip6var)
+
+    for ac in db_access:
+        if ac == host_var:
+            continue
+        if ac == local_ipvar:
+            continue
+        if ac == local_ip6var:
+            continue
+        if mw.inArray(input_access,ac):
+            continue
+        delete.append(ac)
+
+    if mw.inArray(delete, local_ipvar):
+        delete.remove(local_ipvar)
+    if mw.inArray(delete, local_ip6var):
+        delete.remove(local_ip6var)
+
+    return {"add":add,"delete":delete}
+
 def getDbAccess():
     args = getArgs()
     data = checkArgs(args, ['username'])
     if not data[0]:
         return data[1]
     username = args['username']
-    pdb = pMysqlDb()
 
-    users = pdb.query("select Host from mysql.user where User='" +
-                      username + "' AND Host!='localhost'")
+    users = getDbUserAccess(username)
+    if len(users) == 1:
+        return mw.returnJson(True, "localhost")
+    userStr = ','.join(users)
+    if userStr == '127.0.0.1,localhost':
+        return mw.returnJson(True, 'localhost')
+    if userStr == '127.0.0.1,::1,localhost':
+        return mw.returnJson(True, 'localhost')
 
-    isError = isSqlError(users)
-    if isError != None:
-        return isError
-
-    if len(users) < 1:
-        return mw.returnJson(True, "127.0.0.1")
-    accs = []
-    for c in users:
-        accs.append(c["Host"])
-    userStr = ','.join(accs)
     return mw.returnJson(True, userStr)
+
+def setDbAccessByArgs(username,access):
+    pdb = pMysqlDb()
+    psdb = pSqliteDb('databases')
+
+    dbname = psdb.where('username=?', (username,)).getField('name')
+    password = psdb.where("username=?", (username,)).getField('password')
+    if username == 'root':
+        dbname = '*'
+        password = pSqliteDb('config').where('id=?', (1,)).getField('mysql_root')
+
+    db_users_access = getDbUserAccess(username)
+    diff_access = getDbUserAccessDiff(db_users_access,access.split(','))
+    # print(diff_access)
+
+    add_access_list = diff_access["add"]
+
+    pdb.execute("flush privileges")
+    for add_access in add_access_list:
+        pdb.execute("CREATE USER `%s`@`%s` IDENTIFIED BY '%s'" % (username, add_access, password))
+        pdb.execute("grant all privileges on %s.* to `%s`@`%s`" % (dbname, username, add_access))
+    pdb.execute("flush privileges")
+   
+
+    delete_access_list = diff_access["delete"]
+    for del_access in delete_access_list:
+        try:
+            pdb.execute("drop user '" + username + "'@'" + del_access + "'")
+        except Exception:
+            pass
+    
+    psdb.where('username=?', (username,)).save('accept,rw', (access, 'rw',))
+    return True
 
 
 def setDbAccess():
@@ -1485,28 +1823,10 @@ def setDbAccess():
     data = checkArgs(args, ['username', 'access'])
     if not data[0]:
         return data[1]
-    name = args['username']
+    username = args['username']
     access = args['access']
-    pdb = pMysqlDb()
-    psdb = pSqliteDb('databases')
-
-    dbname = psdb.where('username=?', (name,)).getField('name')
-
-    if name == 'root':
-        password = pSqliteDb('config').where(
-            'id=?', (1,)).getField('mysql_root')
-    else:
-        password = psdb.where("username=?", (name,)).getField('password')
-
-    users = pdb.query("select Host from mysql.user where User='" +
-                      name + "' AND Host!='localhost'")
-
-    for us in users:
-        pdb.execute("drop user '" + name + "'@'" + us["Host"] + "'")
-
-    __createUser(dbname, name, password, access)
-
-    psdb.where('username=?', (name,)).save('accept,rw', (access, 'rw',))
+    
+    setDbAccessByArgs(username, access)
     return mw.returnJson(True, '设置成功!')
 
 
@@ -1526,82 +1846,145 @@ def closeSkipGrantTables():
     return True
 
 
-def resetDbRootPwd(version):
+def resetDbRootPwd(version, newpwd=''):
     serverdir = getServerDir()
     myconf = serverdir + "/etc/my.cnf"
-    pwd = mw.getRandomString(16)
+    # newpwd 为空时生成随机密码, 强制修改时传入用户指定的密码
+    pwd = newpwd if newpwd != '' else mw.getRandomString(16)
 
     pSqliteDb('config').where('id=?', (1,)).save('mysql_root', (pwd,))
-    mdb8 = getMdb8Ver()
-    if not mw.inArray(mdb8, version):
+    # 5.5/5.6 的 mysql.user 使用 password 列; 5.7 起已改为 authentication_string
+    m = re.search(r'(\d+)\.(\d+)', version)
+    major = int(m.group(1)) if m else 0
+    minor = int(m.group(2)) if m else 0
+
+    if major < 5 or (major == 5 and minor < 7):
         cmd_pass = serverdir + '/bin/mysql --defaults-file=' + myconf + ' -uroot -e'
         cmd_pass = cmd_pass + '"UPDATE mysql.user SET password=PASSWORD(\'' + pwd + "') WHERE user='root';"
         cmd_pass = cmd_pass + 'flush privileges;"'
         data = mw.execShell(cmd_pass)
-        # print(data)
-    else:
-        auth_policy = getAuthPolicy()
-
-        reset_pwd = 'flush privileges;'
-        reset_pwd = reset_pwd + \
-            "UPDATE mysql.user SET authentication_string='' WHERE user='root';"
-        reset_pwd = reset_pwd + "flush privileges;"
-        reset_pwd = reset_pwd + \
-            "alter user 'root'@'localhost' IDENTIFIED by '" + pwd + "';"
-        reset_pwd = reset_pwd + \
-            "alter user 'root'@'localhost' IDENTIFIED WITH "+auth_policy+" by '" + pwd + "';"
+    elif major == 5:
+        # 5.7: 预清空 authentication_string 后再 ALTER USER 会报 ERROR 1396, 改为直接 UPDATE + PASSWORD()
+        reset_pwd = "UPDATE mysql.user SET plugin='mysql_native_password',authentication_string=PASSWORD('" + pwd + "') WHERE user='root';"
         reset_pwd = reset_pwd + "flush privileges;"
 
         tmp_file = "/tmp/mysql_init_tmp.log"
         mw.writeFile(tmp_file, reset_pwd)
-        cmd_pass = serverdir + '/bin/mysql --defaults-file=' + myconf + ' -uroot -proot < ' + tmp_file
-
+        cmd_pass = serverdir + '/bin/mysql --defaults-file=' + myconf + ' -uroot < ' + tmp_file
         data = mw.execShell(cmd_pass)
-        # print(data)
         os.remove(tmp_file)
+    else:
+        # 8.x+: skip-grant-tables 下 FLUSH 后 ALTER USER 即可, 不要预清空 authentication_string
+        # 遍历所有 root 账号的 host, 避免只改 localhost 导致其它 host 仍是旧密码
+        cmd_hosts = serverdir + '/bin/mysql --defaults-file=' + myconf + \
+            ' -uroot -N -s -e "select host from mysql.user where user=\'root\'"'
+        hosts_data = mw.execShell(cmd_hosts)
+        hosts = []
+        for h in hosts_data[0].split('\n'):
+            h = h.strip()
+            if h != '':
+                hosts.append(h)
+        if len(hosts) == 0:
+            hosts = ['localhost']
+
+        reset_pwd = 'flush privileges;'
+        for h in hosts:
+            reset_pwd = reset_pwd + \
+                "alter user 'root'@'" + h + "' IDENTIFIED by '" + pwd + "';"
+        reset_pwd = reset_pwd + "flush privileges;"
+
+        tmp_file = "/tmp/mysql_init_tmp.log"
+        mw.writeFile(tmp_file, reset_pwd)
+        cmd_pass = serverdir + '/bin/mysql --defaults-file=' + myconf + ' -uroot < ' + tmp_file
+        data = mw.execShell(cmd_pass)
+        os.remove(tmp_file)
+
+    # 重置语句执行出错时返回失败, 避免上层把失败误判为成功
+    if data[1].find('ERROR') != -1:
+        return False
     return True
 
-def fixDbAccess2(version):
+
+def setRootPwdForce(new_password, version=''):
+    '''
+    当前root密码不可用(忘记密码/连接被拒)时, 通过跳过权限校验的方式真正重置密码
+    '''
+    changed = False
+    try:
+        appCMD(version, 'stop')
+        openSkipGrantTables()
+        appCMD(version, 'start')
+        time.sleep(3)
+        changed = resetDbRootPwd(version, new_password)
+    except Exception:
+        changed = False
+    finally:
+        # 无论成败都恢复密码校验, 避免数据库长期处于无校验状态
+        appCMD(version, 'stop')
+        closeSkipGrantTables()
+        appCMD(version, 'start')
+        time.sleep(2)
+
+    if not changed:
+        return False
+
+    # 用新密码验证是否真的可以连接(启动可能较慢, 重试几次)
+    for i in range(10):
+        try:
+            pdb = pMysqlDb()
+            result = pdb.query('show databases')
+            if isSqlError(result) == None:
+                return True
+        except Exception:
+            pass
+        time.sleep(2)
+
+    return False
+
+# def fixDbAccess2(version):
+#     try:
+#         pdb = pMysqlDb()
+#         data = pdb.query('show databases')
+#         isError = isSqlError(data)
+#         if isError != None:
+#             appCMD(version, 'stop')
+#             mw.execShell("rm -rf " + getServerDir() + "/data")
+#             appCMD(version, 'start')
+#             return mw.returnJson(True, '修复成功!')
+#         return mw.returnJson(True, '正常无需修复!')
+#     except Exception as e:
+#         return mw.returnJson(False, '修复失败请重试!')
+        
+def fixDbAccess(version):
+
+    mdb_ddir = getDataDir()
+    # 1) 数据目录不存在或未初始化(缺少 mysql 系统库): 删除后重建, 启动时会自动 initialize-insecure
+    if not os.path.exists(mdb_ddir + '/mysql'):
+        try:
+            appCMD(version, 'stop')
+            if os.path.exists(mdb_ddir):
+                mw.execShell('rm -rf ' + mdb_ddir)
+            appCMD(version, 'start')
+            return mw.returnJson(True, '数据目录不存在,已重建并初始化!')
+        except Exception as e:
+            return mw.returnJson(False, '重建失败:' + str(e))
+
     try:
         pdb = pMysqlDb()
         data = pdb.query('show databases')
         isError = isSqlError(data)
-        if isError != None:
-            appCMD(version, 'stop')
-            mw.execShell("rm -rf " + getServerDir() + "/data")
-            appCMD(version, 'start')
-            return mw.returnJson(True, '修复成功!')
-        return mw.returnJson(True, '正常无需修复!')
+        if isError == None:
+            return mw.returnJson(True, '正常无需修复!')
+
+        # 2) 密码错误 -> 跳过权限校验重置密码, 并用新密码验证连接
+        if not setRootPwdForce(mw.getRandomString(16), version):
+            return mw.returnJson(False, '密码重置失败,请检查数据库运行状态!')
+        return mw.returnJson(True, '修复成功,root密码已重置!')
     except Exception as e:
-        return mw.returnJson(False, '修复失败请重试!')
-        
-def fixDbAccess(version):
-
-    pdb = pMysqlDb()
-    mdb_ddir = getDataDir()
-    if not os.path.exists(mdb_ddir):
-        return mw.returnJson(False, '数据目录不存在,尝试重启重建!')
-
-    try:
-        data = pdb.query('show databases')
-        isError = isSqlError(data)
-        if isError != None:
-       
-            # 重置密码
-            appCMD(version, 'stop')
-            openSkipGrantTables()
-            appCMD(version, 'start')
-            time.sleep(3)
-            resetDbRootPwd(version)
-
-            appCMD(version, 'stop')
-            closeSkipGrantTables()
-            appCMD(version, 'start')
-
-            return mw.returnJson(True, '修复成功!')
-        return mw.returnJson(True, '正常无需修复!')
-    except Exception as e:
-        return mw.returnJson(False, '修复失败请重试!')
+        # 连接阶段抛异常一般是密码不可用, 仍尝试重置
+        if setRootPwdForce(mw.getRandomString(16), version):
+            return mw.returnJson(True, '修复成功,root密码已重置!')
+        return mw.returnJson(False, '修复失败:' + str(e))
 
 
 
@@ -1618,8 +2001,11 @@ def setDbRw(version=''):
     pdb = pMysqlDb()
     psdb = pSqliteDb('databases')
     dbname = psdb.where("id=?", (uid,)).getField('name')
-    users = pdb.query(
-        "select Host from mysql.user where User='" + username + "'")
+    try:
+        users = pdb.query(
+            "select Host from mysql.user where User='" + username + "'")
+    except Exception as e:
+        return mw.returnJson(-1, str(e))
 
     # show grants for demo@"127.0.0.1";
     for x in users:
@@ -1627,7 +2013,10 @@ def setDbRw(version=''):
 
         sql = "REVOKE ALL PRIVILEGES ON `" + dbname + \
             "`.* FROM '" + username + "'@'" + x["Host"] + "';"
-        r = pdb.query(sql)
+        try:
+            pdb.query(sql)
+        except Exception:
+            pass
         # print(sql, r)
 
         if rw == 'rw':
@@ -1639,7 +2028,10 @@ def setDbRw(version=''):
         else:
             sql = "GRANT all privileges ON " + dbname + ".* TO " + \
                 username + "@'" + x["Host"] + "'"
-        pdb.execute(sql)
+        try:
+            pdb.execute(sql)
+        except Exception as e:
+            return mw.returnJson(False, '切换失败!' + str(e))
     pdb.execute("flush privileges")
     r = psdb.where("id=?", (uid,)).setField('rw', rw)
     # print(r)
@@ -1659,7 +2051,10 @@ def getDbInfo():
 
     ret = {}
     sql = "select sum(DATA_LENGTH)+sum(INDEX_LENGTH) as sum_size from information_schema.tables  where table_schema='%s'" % db_name
-    data_sum = pdb.query(sql)
+    try:
+        data_sum = pdb.query(sql)
+    except Exception as e:
+        return mw.returnJson(-1, str(e))
 
     data = 0
     if data_sum[0]['sum_size'] != None:
@@ -1673,7 +2068,12 @@ def getDbInfo():
     for i in tables:
         tb_sql = "show table status from `%s` where name = '%s'" % (db_name, i[
                                                                     table_key])
-        table = pdb.query(tb_sql)
+        try:
+            table = pdb.query(tb_sql)
+        except Exception:
+            continue
+        if len(table) < 1:
+            continue
 
         tmp = {}
         tmp['type'] = table[0]["Engine"]
@@ -1706,7 +2106,10 @@ def repairTable():
     db_name = args['db_name']
     tables = json.loads(args['tables'])
     pdb = pMysqlDb()
-    mtable = pdb.query('show tables from `%s`' % db_name)
+    try:
+        mtable = pdb.query('show tables from `%s`' % db_name)
+    except Exception as e:
+        return mw.returnJson(-1, str(e))
 
     ret = []
     key = "Tables_in_" + db_name
@@ -1731,7 +2134,10 @@ def optTable():
     db_name = args['db_name']
     tables = json.loads(args['tables'])
     pdb = pMysqlDb()
-    mtable = pdb.query('show tables from `%s`' % db_name)
+    try:
+        mtable = pdb.query('show tables from `%s`' % db_name)
+    except Exception as e:
+        return mw.returnJson(-1, str(e))
     ret = []
     key = "Tables_in_" + db_name
     for i in mtable:
@@ -1756,7 +2162,10 @@ def alterTable():
     tables = json.loads(args['tables'])
     table_type = args['table_type']
     pdb = pMysqlDb()
-    mtable = pdb.query('show tables from `%s`' % db_name)
+    try:
+        mtable = pdb.query('show tables from `%s`' % db_name)
+    except Exception as e:
+        return mw.returnJson(-1, str(e))
 
     ret = []
     key = "Tables_in_" + db_name
@@ -1823,6 +2232,19 @@ def setDbrunMode(version=''):
     if not mode in ['classic', 'gtid']:
         return mw.returnJson(False, "mode的值无效:" + mode)
 
+    if version == '5.6':
+        dbreload = 'yes'
+    else:
+        db = pMysqlDb()
+        # GTID_MODE 需逐级切换, 先改运行时再写配置, 失败时不改配置文件
+        try:
+            if mode == 'classic':
+                setGtidModeStepwise(db, 'OFF')
+            elif mode == 'gtid':
+                setGtidModeStepwise(db, 'ON')
+        except Exception as e:
+            return mw.returnJson(False, 'GTID模式切换失败: ' + str(e))
+
     origin_mode = recognizeDbMode()
     path = getConf()
     con = mw.readFile(path)
@@ -1830,27 +2252,6 @@ def setDbrunMode(version=''):
     rep_after = "!include %s/%s.cnf" % (getServerDir() + "/etc/mode", mode)
     con = re.sub(rep, rep_after, con)
     mw.writeFile(path, con)
-
-    if version == '5.6':
-        dbreload = 'yes'
-    else:
-        db = pMysqlDb()
-        # The value of @@GLOBAL.GTID_MODE can only be changed one step at a
-        # time: OFF <-> OFF_PERMISSIVE <-> ON_PERMISSIVE <-> ON. Also note that
-        # this value must be stepped up or down simultaneously on all servers.
-        # See the Manual for instructions.
-        if mode == 'classic':
-            db.query('set global enforce_gtid_consistency=off')
-            db.query('set global gtid_mode=on')
-            db.query('set global gtid_mode=on_permissive')
-            db.query('set global gtid_mode=off_permissive')
-            db.query('set global gtid_mode=off')
-        elif mode == 'gtid':
-            db.query('set global enforce_gtid_consistency=on')
-            db.query('set global gtid_mode=off')
-            db.query('set global gtid_mode=off_permissive')
-            db.query('set global gtid_mode=on_permissive')
-            db.query('set global gtid_mode=on')
 
     if dbreload == "yes":
         restart(version)
@@ -1884,17 +2285,18 @@ def setDbMasterAccess():
     pdb = pMysqlDb()
     psdb = pSqliteDb('master_replication_user')
     password = psdb.where("username=?", (username,)).getField('password')
-    users = pdb.query("select Host from mysql.user where User='" +
-                      username + "' AND Host!='localhost'")
-    for us in users:
-        pdb.execute("drop user '" + username + "'@'" + us["Host"] + "'")
+
+    db_users_access = getDbUserAccess(username)
+    for user_access in db_users_access:
+        try:
+            pdb.execute("drop user '" + username + "'@'%s'" % (user_access,))
+        except Exception:
+            pass
 
     dbname = '*'
     for a in access.split(','):
-        pdb.execute(
-            "CREATE USER `%s`@`%s` IDENTIFIED BY '%s'" % (username, a, password))
-        pdb.execute(
-            "grant all privileges on %s.* to `%s`@`%s`" % (dbname, username, a))
+        pdb.execute("CREATE USER `%s`@`%s` IDENTIFIED BY '%s'" % (username, a, password))
+        pdb.execute("grant all privileges on %s.* to `%s`@`%s`" % (dbname, username, a))
 
     pdb.execute("flush privileges")
     psdb.where('username=?', (username,)).save('accept', (access,))
@@ -1903,10 +2305,15 @@ def setDbMasterAccess():
 
 def resetMaster(version=''):
     pdb = pMysqlDb()
-    r = pdb.execute('reset master')
-    isError = isSqlError(r)
-    if isError != None:
-        return isError
+    try:
+        err = executeResetMaster(pdb, version)
+    except Exception as e:
+        err = str(e)
+    if err:
+        isError = isSqlError(err)
+        if isError is not None:
+            return isError
+        return mw.returnJson(False, '重置失败: ' + err)
     return mw.returnJson(True, '重置成功!')
 
 
@@ -2164,10 +2571,17 @@ def addMasterRepSlaveUser(version=''):
     if psdb.where("username=?", (username)).count() > 0:
         return mw.returnJson(False, '用户已存在!')
 
-    mdb8 = ['8.0','8.1','8.2','8.3','8.4']
+    mdb8 = getMdb8Ver()
     if mw.inArray(mdb8,version):
-        sql = "CREATE USER '" + username + \
-            "'  IDENTIFIED WITH mysql_native_password BY '" + password + "';"
+        m = re.search(r'(\d+)\.(\d+)', version)
+        major = int(m.group(1)) if m else 0
+        minor = int(m.group(2)) if m else 0
+        if major >= 9 or (major == 8 and minor >= 4):
+            # 8.4 起默认禁用 mysql_native_password, 9.x 已移除该插件, 用默认认证插件
+            sql = "CREATE USER '" + username + "'@'%' IDENTIFIED BY '" + password + "';"
+        else:
+            auth_policy = getAuthPolicy()
+            sql = "CREATE USER '" + username + "'@'%' IDENTIFIED WITH " + auth_policy + " BY '" + password + "';"
         pdb.execute(sql)
         sql = "grant replication slave on *.* to '" + username + "'@'%';"
         result = pdb.execute(sql)
@@ -2183,7 +2597,7 @@ def addMasterRepSlaveUser(version=''):
         if isError != None:
             return isError
 
-    sql_select = "grant select,reload,REPLICATION CLIENT,PROCESS on *.* to " + username + "@'%';"
+    sql_select = "grant select,reload,REPLICATION CLIENT,PROCESS on *.* to '" + username + "'@'%';"
     pdb.execute(sql_select)
     pdb.execute('FLUSH PRIVILEGES;')
 
@@ -2272,13 +2686,25 @@ def delMasterRepSlaveUser(version=''):
 
     pdb = pMysqlDb()
     psdb = pSqliteDb('master_replication_user')
-    pdb.execute("drop user '" + name + "'@'%'")
-    pdb.execute("drop user '" + name + "'@'localhost'")
+    try:
+        pdb.execute("drop user '" + name + "'@'%'")
+    except Exception:
+        pass
+    try:
+        pdb.execute("drop user '" + name + "'@'localhost'")
+    except Exception:
+        pass
 
-    users = pdb.query("select Host from mysql.user where User='" +
-                      name + "' AND Host!='localhost'")
+    try:
+        users = pdb.query("select Host from mysql.user where User='" +
+                          name + "' AND Host!='localhost'")
+    except Exception:
+        users = []
     for us in users:
-        pdb.execute("drop user '" + name + "'@'" + us["Host"] + "'")
+        try:
+            pdb.execute("drop user '" + name + "'@'" + us["Host"] + "'")
+        except Exception:
+            pass
 
     psdb.where("username=?", (args['username'],)).delete()
 
@@ -2293,7 +2719,10 @@ def updateMasterRepSlaveUser(version=''):
 
     pdb = pMysqlDb()
     psdb = pSqliteDb('master_replication_user')
-    pdb.execute("drop user '" + args['username'] + "'@'%'")
+    try:
+        pdb.execute("drop user '" + args['username'] + "'@'%'")
+    except Exception:
+        pass
 
     pdb.execute("GRANT REPLICATION SLAVE ON *.* TO  '" +
                 args['username'] + "'@'%' identified by '" + args['password'] + "'")
@@ -2585,10 +3014,10 @@ def trySlaveSyncBugfix(version=''):
     gtid_purged = gtid_purged.strip(',')
     sql = "set @@global.gtid_purged='" + gtid_purged + "'"
 
-    sdb.query('stop slave')
+    sdb.query('stop ' + getSlaveNameByVer(version))
     # print(sql)
     sdb.query(sql)
-    sdb.query('start slave')
+    sdb.query('start ' + getSlaveNameByVer(version))
     return mw.returnJson(True, '修复成功!')
 
 def getSlaveSyncCmd(version=''):
@@ -2605,10 +3034,18 @@ def initSlaveStatus(version=''):
         return mw.returnJson(False, '需要先设置同步配置')
 
     mode = mw.readFile(mode_file)
-    if mode == 'ssh':
-        return initSlaveStatusSSH(version)
-    if mode == 'sync-user':
-        return initSlaveStatusSyncUser(version)
+    try:
+        if mode == 'ssh':
+            return initSlaveStatusSSH(version)
+        if mode == 'sync-user':
+            return initSlaveStatusSyncUser(version)
+    except Exception as e:
+        estr = str(e)
+        if '1045' in estr or 'Access denied' in estr:
+            return mw.returnJson(False, 'root密码错误,请先在面板[修改root密码]或点[一键修复]重置密码!')
+        if '2003' in estr or 'Can\'t connect' in estr or '2006' in estr:
+            return mw.returnJson(False, 'MySQL连接失败: ' + estr)
+        return mw.returnJson(False, '初始化同步状态失败: ' + estr)
 
 
 def parseSlaveSyncCmd(cmd):
@@ -2640,11 +3077,21 @@ def initSlaveStatusSyncUser(version=''):
 
     slave_name = getSlaveName()
     # print(data)
-    pdb = pMysqlDb()
-    if len(slave_data) == 1:
-        dlist = pdb.query('show '+slave_name+' status')
-        if len(dlist) > 0:
-            return mw.returnJson(False, '已经初始化好了zz...')
+    try:
+        pdb = pMysqlDb()
+    except Exception as e:
+        return mw.returnJson(False, '数据库连接失败: ' + str(e))
+
+    try:
+        if len(slave_data) == 1:
+            dlist = pdb.query('show '+slave_name+' status')
+            if len(dlist) > 0:
+                return mw.returnJson(False, '已经初始化好了zz...')
+    except Exception as e:
+        estr = str(e)
+        if '1045' in estr or 'Access denied' in estr:
+            return mw.returnJson(False, 'root密码错误,请先在面板[修改root密码]或点[一键修复]重置密码!')
+        return mw.returnJson(False, '检查同步状态失败: ' + estr)
 
     msg = ''
     local_mode = recognizeDbMode()
@@ -2678,18 +3125,38 @@ def initSlaveStatusSyncUser(version=''):
         # pdb.query("start slave user='{}' password='{}';".format(
         #     u['user'], u['pass']))
 
-    pdb.query("start "+slave_name)
-    pdb.query("start all "+slave_name)
+    # msg 非空说明没有可用通道(模式不一致/命令为空), 此时不能 START, 否则报 1200
+    if msg != '':
+        return mw.returnJson(False, msg)
 
-    if msg == '':
-        msg = '初始化成功!'
-    return mw.returnJson(True, msg)
+    try:
+        pdb.query("start "+slave_name)
+    except Exception as e:
+        isError = isSqlError(str(e))
+        if isError:
+            return isError
+        return mw.returnJson(False, '启动同步失败: ' + str(e))
+
+    if len(slave_data) > 1:
+        # 多通道场景: 部分版本不支持 start all, 失败不影响已启动的通道
+        try:
+            pdb.query("start all "+slave_name)
+        except Exception:
+            pass
+
+    return mw.returnJson(True, '初始化成功!')
 
 
 def initSlaveStatusSSH(version=''):
     slave_name = getSlaveName()
-    db = pMysqlDb()
-    dlist = db.query('show '+slave_name+' status')
+    try:
+        db = pMysqlDb()
+        dlist = db.query('show '+slave_name+' status')
+    except Exception as e:
+        estr = str(e)
+        if '1045' in estr or 'Access denied' in estr:
+            return mw.returnJson(False, 'root密码错误,请先在面板[修改root密码]或点[一键修复]重置密码!')
+        return mw.returnJson(False, '数据库连接失败: ' + estr)
 
     conn = pSqliteDb('slave_id_rsa')
     ssh_list = conn.field('ip,port,id_rsa,db_user').select()
@@ -2740,7 +3207,7 @@ def initSlaveStatusSSH(version=''):
             ps = u['username'] + "|" + u['password']
             print(ps)
             conn.where('ip=?', (ip,)).setField('ps', ps)
-            db.query('stop slave')
+            db.query('stop ' + getSlaveNameByVer(version))
 
             # 保证同步IP一致
             cmd = cmd_data['data']['cmd']
@@ -2777,7 +3244,7 @@ def setSlaveStatus(version=''):
 
     for v in dlist:
         connection_name = ''
-        cmd = "slave"
+        cmd = slave_name
         if 'Channel_Name' in v:
             ch_name = v['Channel_Name']
             cmd = slave_name + " for channel '{}'".format(ch_name)
@@ -3202,7 +3669,8 @@ def doFullSyncUserImportContentForChannel(file, channel_name):
 def doFullSyncUser(version=''):
     which_pv = mw.execShell('which pv')
     is_exist_pv = False
-    if os.path.exists(which_pv[0]):
+    pv_path = which_pv[0].strip()
+    if os.path.exists(pv_path):
         is_exist_pv = True
 
     time_all_s = time.time()
@@ -3257,10 +3725,9 @@ def doFullSyncUser(version=''):
     writeDbSyncStatus({'code': 1, 'msg': '正在停止从库...', 'progress': 15})
 
     mdb8 = getMdb8Ver()
-    if mw.inArray(mdb8,version):
-        db.query("stop slave user='{}' password='{}';".format(user, apass))
-    else:
-        db.query("stop slave")
+    slave_name = getSlaveNameByVer(version)
+    # 8.x 起 STOP SLAVE 的 user/password 参数已移除, 凭据由 CHANGE REPLICATION SOURCE TO 保存
+    db.query("stop " + slave_name)
         
     time.sleep(1)
     writeDbSyncStatus({'code': 2, 'msg': '远程导出数据...', 'progress': 20})
@@ -3305,7 +3772,9 @@ def doFullSyncUser(version=''):
     if os.path.exists(bak_file):
 
         # 重置 
-        db.execute('reset master')
+        reset_err = executeResetMaster(db)
+        if reset_err:
+            print('重置master失败: ' + reset_err)
         if channel_name != '':
             doFullSyncUserImportContentForChannel(bak_file, channel_name)
 
@@ -3326,12 +3795,10 @@ def doFullSyncUser(version=''):
             ' ' + sync_db_import + ' < ' + bak_file
         mw.execShell(my_import_cmd)
 
-    if mw.inArray(mdb8, version):
-        db.query("start replica user='{}' password='{}';".format(user, apass))
-    else:
-        db.query("start slave")
-
-    db.query("start all slaves")
+    db.query("start " + slave_name)
+    if channel_name != '':
+        # 多通道用 FOR CHANNEL 启动(MySQL 不支持 START ALL SLAVES)
+        db.query("start " + slave_name + " for channel '" + channel_name + "'")
     time_all_e = time.time()
     cos = time_all_e - time_all_s
     writeDbSyncStatus({'code': 6, 'msg': '总耗时:'+str(int(cos))+'秒,从库重启完成...', 'progress': 100})
@@ -3434,7 +3901,7 @@ def doFullSyncSSH(version=''):
     result = result.decode('utf-8')
     cmd_data = json.loads(result)
 
-    db.query('stop slave')
+    db.query('stop ' + getSlaveNameByVer(version))
     writeDbSyncStatus({'code': 3, 'msg': '停止从库完成...', 'progress': 45})
 
     cmd = cmd_data['data']['cmd']
@@ -3472,7 +3939,7 @@ def doFullSyncSSH(version=''):
 
     # "start slave user='{}' password='{}';".format(uinfo['username'], uinfo['password'])
 
-    db.query("start slave")
+    db.query("start " + getSlaveNameByVer(version))
     writeDbSyncStatus({'code': 6, 'msg': '从库重启完成...', 'progress': 100})
 
     os.system("rm -rf " + SSH_PRIVATE_KEY)
@@ -3521,13 +3988,14 @@ def uninstallPreInspection(version):
     if not os.path.exists(data_dir):
         return 'ok'
     stop(version)
-    if mw.isDebugMode():
-        return 'ok'
+
+    # if mw.isDebugMode():
+    #     return 'ok'
 
     from utils.plugin import plugin as MwPlugin
     MwPlugin.instance().removeIndex(getPluginName(), version)
     
-    return "请手动删除MySQL[{}]<br/> rm -rf {}".format(version, getServerDir())
+    return "请手动删除MySQL-COMMUNITY[{}]<br/> rm -rf {}".format(version, getServerDir())
 
 if __name__ == "__main__":
     func = sys.argv[1]
@@ -3588,10 +4056,16 @@ if __name__ == "__main__":
         print(rootPwd())
     elif func == 'get_db_list':
         print(getDbList())
+    elif func == 'get_table_list':
+        print(getTableList())
     elif func == 'set_db_backup':
         print(setDbBackup())
     elif func == 'import_db_backup':
         print(importDbBackup())
+    elif func == 'import_db_backup_progress':
+        print(importDbBackupProgress())
+    elif func == 'import_db_backup_progress_bar':
+        print(importDbBackupProgressBar())
     elif func == 'import_db_external':
         print(importDbExternal())
     elif func == 'import_db_external_progress':

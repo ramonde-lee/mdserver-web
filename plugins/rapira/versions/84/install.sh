@@ -2,6 +2,8 @@
 PATH=/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin:~/bin:/opt/homebrew/bin
 export PATH=$PATH:/opt/homebrew/bin
 
+action=${1}
+
 curPath=`pwd`
 rootPath=$(dirname "$curPath")
 rootPath=$(dirname "$rootPath")
@@ -108,11 +110,9 @@ fi
 # OPTIONS="${OPTIONS} --enable-dtrace"
 
 if [ "$sysName" = "Darwin" ];then
-	BREW_DIR=`which brew`
-	BREW_DIR=${BREW_DIR/\/bin\/brew/}
 
-	LIB_DEPEND_DIR=`brew info openssl | grep ${BREW_DIR}/Cellar/openssl | cut -d \  -f 1 | awk 'END {print}'`
-	OPTIONS="$OPTIONS --with-openssl=$(brew --prefix openssl)"
+	LIB_DEPEND_DIR=`brew --prefix openssl@3`
+	OPTIONS="$OPTIONS --with-openssl=${LIB_DEPEND_DIR}"
 	export PKG_CONFIG_PATH=$LIB_DEPEND_DIR/lib/pkgconfig
 	export OPENSSL_CFLAGS="-I${LIB_DEPEND_DIR}/include"
 	export OPENSSL_LIBS="-L/${LIB_DEPEND_DIR}/lib -lssl -lcrypto -lz"
@@ -134,11 +134,11 @@ if [ ! -d ${serverPath}/rapira/${PHP_VER}/link ];then
 	cd $sourcePath/rapira/php${PHP_VER}
 	PHP_PREFIX="${serverPath}/rapira/${PHP_VER}/link"
 	./buildconf --force
-	./configure --prefix="${PHP_PREFIX}" \
-		--enable-embed \
-	    --enable-igbinary \
-	    --enable-redis \
-	    --enable-redis-igbinary $EXTRA
+	echo "./configure --prefix="${PHP_PREFIX}" --enable-embed=shared \
+	    $OPTIONS"
+	./configure --prefix="${PHP_PREFIX}" --enable-embed \
+		--enable-sockets \
+	    $OPTIONS
 	make -j"$(getconf _NPROCESSORS_ONLN)"
 	make install
 fi
@@ -156,11 +156,16 @@ fi
 
 if [ ! -f ${serverPath}/rapira/${PHP_VER}/bin/rapira ];then
 	cd $rapira_srcdir
+	echo "export PHP_CONFIG=${serverPath}/rapira/${PHP_VER}/link/bin/php-config"
 	export PHP_CONFIG=${serverPath}/rapira/${PHP_VER}/link/bin/php-config
 	# cargo build --release
 	# cargo +1.98.1 build --release
 	if [ ! -f $CARGO_BIN ];then
 		curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+	fi
+
+	if [ "$sysName" == "Darwin" ];then
+		CARGO_BIN=/Users/midoks/.cargo/bin/cargo
 	fi
 
 	$CARGO_BIN +1.98.1 build --release --locked --bin rapira
@@ -179,9 +184,10 @@ Uninstall_php()
 	echo "卸载php-${version}..."
 }
 
-action=${1}
-if [ "${1}" = 'install' ];then
+if [ "${action}" = 'install' ] || [ "$action" = "upgrade" ];then
 	Install_php
-else
+elif [ "${action}" = 'uninstall' ];then
 	Uninstall_php
+else
+	echo "OPTIONS ERROR"
 fi

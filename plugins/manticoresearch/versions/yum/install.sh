@@ -25,7 +25,8 @@ Install_App()
 	mkdir -p $MC_DIR
 
 	yum install -y https://repo.manticoresearch.com/manticore-repo.noarch.rpm
-	yum install -y manticore manticore-extra
+	yum install -y manticore
+	yum install -y manticore-extra
 
 	echo "${VERSION}" > $serverPath/manticoresearch/version.pl
 
@@ -39,7 +40,8 @@ Install_App()
 
 Uninstall_App()
 {
-	yum -y remove manticore manticore-extra
+	yum -y remove manticore
+	yum -y remove manticore-extra
 
 	if [ -d $serverPath/manticoresearch ];then
 		rm -rf $serverPath/manticoresearch
