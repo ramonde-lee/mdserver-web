@@ -22,14 +22,6 @@ Install_App()
 	mkdir -p ${postgreDir}
 	echo '正在安装脚本文件...'
 
-	if id postgres &> /dev/null ;then 
-	    echo "postgres uid is `id -u postgres`"
-	    echo "postgres shell is `grep "^postgres:" /etc/passwd |cut -d':' -f7 `"
-	else
-	    groupadd postgres
-		useradd -g postgres postgres
-	fi
-
 	if [ ! -d /home/postgres ];then
 		mkdir -p /home/postgres
 	fi
@@ -135,8 +127,10 @@ Uninstall_App()
 	echo '卸载[postgresql]完成'
 }
 
-if [ "${1}" = "install" ];then
+if [ "${action}" = 'install' ];then
 	Install_App
-else
+elif [ "${action}" = 'uninstall' ];then
 	Uninstall_App
+else
+	echo "OPTIONS ERROR"
 fi

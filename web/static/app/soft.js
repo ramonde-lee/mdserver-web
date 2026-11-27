@@ -37,6 +37,23 @@ function softMain(name, title, version) {
 }
 
 //取软件列表
+function softEscapeHtml(text) {
+    return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function renderPluginInfoErrors(errors) {
+    var box = $("#plugin_info_error");
+    if (!errors || errors.length == 0) {
+        box.hide().html('');
+        return;
+    }
+    var html = '<b>以下插件 info.json 不完整，已跳过加载：</b><br>';
+    for (var i = 0; i < errors.length; i++) {
+        html += '· ' + softEscapeHtml(errors[i].name) + '：' + softEscapeHtml(errors[i].error) + '<br>';
+    }
+    box.html(html).show();
+}
+
 function getSList(isdisplay) {
     if (isdisplay !== true) {
         var loadT = layer.msg('正在获取列表...', { icon: 16, time: 0, shade: [0.3, '#000'] })
@@ -78,6 +95,7 @@ function getSList(isdisplay) {
         }
 
         $(".softtype").html(tBody);
+        renderPluginInfoErrors(rdata.info_errors);
         $("#softPage").html(rdata.list);
         $("#softPage .Pcount").css({ "position": "absolute", "left": "0" })
 
@@ -106,25 +124,25 @@ function getSList(isdisplay) {
                 version_info = version_info.substring(0, version_info.length - 1);
             }
 
-            var handle = '<a class="btlink" onclick="addVersion(\'' + plugin.name + '\',\'' + version_info + '\',\'' + plugin.tip + '\',this,\'' + plugin.title + '\',' + plugin.install_pre_inspection + ')">安装</a>';
+            var handle = '<a class="btlink" onclick="addVersion(\'' + jsEncode(plugin.name) + '\',\'' + jsEncode(version_info) + '\',\'' + jsEncode(plugin.tip) + '\',this,\'' + jsEncode(plugin.title) + '\',' + plugin.install_pre_inspection + ')">安装</a>';
             
             if (plugin.setup == true) {
 
                 var mupdate = '';//(plugin.versions[n] == plugin.updates[n]) '' : '<a class="btlink" onclick="softUpdate(\'' + plugin.name + '\',\'' + plugin.versions[n].version + '\',\'' + plugin.updates[n] + '\')">更新</a> | ';
                 // if (plugin.versions[n] == '') mupdate = '';
-                handle = mupdate + '<a class="btlink" onclick="softMain(\'' + plugin.name + '\',\'' + plugin.title + '\',\'' + plugin.setup_version + '\')">设置</a> | <a class="btlink" onclick="uninstallVersion(\'' + plugin.name + '\',\'' + plugin.title +'\',\'' + plugin.setup_version + '\',' + plugin.uninstall_pre_inspection +')">卸载</a>';
-                titleClick = 'onclick="softMain(\'' + plugin.name + '\',\'' + plugin.title + '\',\'' + plugin.setup_version + '\')" style="cursor:pointer"';
-             
-                softPath = '<span class="glyphicon glyphicon-folder-open" title="' + plugin.path + '" onclick="openPath(\'' + plugin.path + '\')"></span>';
+                handle = mupdate + '<a class="btlink" onclick="softMain(\'' + jsEncode(plugin.name) + '\',\'' + jsEncode(plugin.title) + '\',\'' + jsEncode(plugin.setup_version) + '\')">设置</a> | <a class="btlink" onclick="uninstallVersion(\'' + jsEncode(plugin.name) + '\',\'' + jsEncode(plugin.title) +'\',\'' + jsEncode(plugin.setup_version) + '\',' + plugin.uninstall_pre_inspection +')">卸载</a>';
+                titleClick = 'onclick="softMain(\'' + jsEncode(plugin.name) + '\',\'' + jsEncode(plugin.title) + '\',\'' + jsEncode(plugin.setup_version) + '\')" style="cursor:pointer"';
+            
+                softPath = '<span class="glyphicon glyphicon-folder-open" title="' + plugin.path + '" onclick="openPath(\'' + jsEncode(plugin.path) + '\')"></span>';
                 if (plugin.coexist){
                     indexshow = '<div class="index-item">\
-                        <input class="btswitch btswitch-ios" id="index_' + plugin.name  + plugin.versions + '" type="checkbox" ' + checked + '>\
-                        <label class="btswitch-btn" for="index_' + plugin.name + plugin.versions + '" onclick="toIndexDisplay(\'' + plugin.name + '\',\'' + plugin.versions + '\',\'' + plugin.coexist +'\')"></label>\
+                        <input class="btswitch btswitch-ios" id="index_' + jsEncode(plugin.name)  + jsEncode(plugin.versions) + '" type="checkbox" ' + checked + '>\
+                        <label class="btswitch-btn" for="index_' + jsEncode(plugin.name) + jsEncode(plugin.versions) + '" onclick="toIndexDisplay(\'' + jsEncode(plugin.name) + '\',\'' + jsEncode(plugin.versions) + '\',\'' + jsEncode(plugin.coexist) +'\')"></label>\
                     </div>';
                 } else {
                     indexshow = '<div class="index-item">\
-                        <input class="btswitch btswitch-ios" id="index_' + plugin.name + '" type="checkbox" ' + checked + '>\
-                        <label class="btswitch-btn" for="index_' + plugin.name + '" onclick="toIndexDisplay(\'' + plugin.name + '\',\'' + plugin.setup_version + '\')"></label>\
+                        <input class="btswitch btswitch-ios" id="index_' + jsEncode(plugin.name) + '" type="checkbox" ' + checked + '>\
+                        <label class="btswitch-btn" for="index_' + jsEncode(plugin.name) + '" onclick="toIndexDisplay(\'' + jsEncode(plugin.name) + '\',\'' + jsEncode(plugin.setup_version) + '\')"></label>\
                     </div>';
                 }
                 
@@ -188,7 +206,7 @@ function checkUpdate(info){
             var data = $.parseJSON(rdata.data);
             if (data.status == 1){
                 var id_name = 'op_'+info.name+"_"+info.setup_version.replace(".", "_");
-                var content = "<a class=\"btlink\" onclick=\"upgradeToNewVersion('"+info.name+"','"+info.setup_version+"', '"+data.data+"')\">有更新</a> | " ;
+                var content = "<a class=\"btlink\" onclick=\"upgradeToNewVersion('"+jsEncode(info.name)+"','"+jsEncode(info.setup_version)+"', '"+jsEncode(data.data)+"')\">有更新</a> | " ;
                 $("#"+id_name).prepend(content);
             }
         },'json');
@@ -214,7 +232,7 @@ function upgradeToNewVersion(name, version, show_version){
 
 function installPreInspection(name, ver, callback){
     var loading = layer.msg('正在检查安装环境...', { icon: 16, time: 0, shade: [0.3, '#000'] });
-     $.post("/plugins/run", {'name':name,'version':ver,'func':'install_pre_inspection'}, function(rdata) {
+    $.post("/plugins/run", {'name':name,'version':ver,'func':'install_pre_inspection'}, function(rdata) {
         layer.close(loading);
         if (rdata.status){
             if (rdata.data == 'ok'){
@@ -235,11 +253,11 @@ function addVersion(name, ver, type, obj, title, install_pre_inspection) {
         var veropt = ver.split("|");
         var selectVersion = '';
         for (var i = 0; i < veropt.length; i++) {
-            selectVersion += '<option>' + name + ' ' + veropt[i] + '</option>';
-        }
-        option = "<select id='selectVersion' class='bt-input-text' style='margin-left:30px'>" + selectVersion + "</select>";
-    } else {
-        option = '<span id="selectVersion" val="' + name + ' ' + ver + '">【' + titlename + '】 ' + ver + '</span>';
+        selectVersion += '<option>' + name + ' ' + veropt[i] + '</option>';
+    }
+    option = "<select id='selectVersion' class='bt-input-text' style='margin-left:30px'>" + selectVersion + "</select>";
+} else {
+    option = '<span id="selectVersion" val="' + name + ' ' + ver + '">【' + titlename + '】 ' + ver + '</span>';
     }
 
     layer.open({
@@ -250,8 +268,8 @@ function addVersion(name, ver, type, obj, title, install_pre_inspection) {
         shadeClose: true,
         btn: ['提交','关闭'],
         content: "<div class='bt-form pd20 c6'>\
-			<div class='version line'>安装版本：" + option + "</div>\
-	    </div>",
+            <div class='version line'>安装版本：" + option + "</div>\
+        </div>",
         success:function(){
             $('.fangshi input').click(function() {
                 $(this).attr('checked', 'checked').parent().siblings().find("input").removeAttr('checked');
@@ -288,7 +306,7 @@ function addVersion(name, ver, type, obj, title, install_pre_inspection) {
 //卸载软件
 function uninstallPreInspection(name, title, ver, callback){
     var loading = layer.msg('正在检查卸载环境...', { icon: 16, time: 0, shade: [0.3, '#000'] });
-     $.post("/plugins/run", {'name':name,'version':ver,'func':'uninstall_pre_inspection'}, function(rdata) {
+    $.post("/plugins/run", {'name':name,'version':ver,'func':'uninstall_pre_inspection'}, function(rdata) {
         layer.close(loading);
         if (rdata.status){
             if (rdata.data == 'ok'){
@@ -395,11 +413,11 @@ function indexListHtml(callback){
                 data_id = plugin.name + '-' + plugin.versions;
             }
 
-            con += '<div class="col-sm-3 col-md-3 col-lg-3" data-id="' + data_id + '">\
+            con += '<div class="col-sm-3 col-md-3 col-lg-3" data-id="' + htmlEncode(data_id) + '">\
                 <span class="spanmove"></span>\
-                <div onclick="softMain(\'' + plugin.name + '\',\'' + plugin.title + '\',\'' + plugin.setup_version + '\')">\
-                <div class="image"><img bk-src="/static/img/loading.gif" src="/plugins/file?name=' + plugin.name + '&f=ico.png" style="max-width:48px;"></div>\
-                <div class="sname">' +  name + state + '</div>\
+                <div onclick="softMain(\'' + jsEncode(plugin.name) + '\',\'' + jsEncode(plugin.title) + '\',\'' + jsEncode(plugin.setup_version) + '\')">\
+                <div class="image"><img bk-src="/static/img/loading.gif" src="/plugins/file?name=' + htmlEncode(plugin.name) + '&f=ico.png" style="max-width:48px;"></div>\
+                <div class="sname">' +  htmlEncode(name) + state + '</div>\
                 </div>\
             </div>';
 
@@ -502,19 +520,19 @@ function importPlugin(file){
                 </style>\
                 <div class="bt-form c7  install_three_plugin pb70">\
                     <div class="plugin_user_info">\
-                        <p><b>名称：</b>'+ data.title + '</p>\
-                        <p><b>版本：</b>' + data.versions +'</p>\
-                        <p><b>描述：</b>' + data.ps + '</p>\
+                        <p><b>名称：</b>'+ htmlEncode(data.title) + '</p>\
+                        <p><b>版本：</b>' + htmlEncode(data.versions) +'</p>\
+                        <p><b>描述：</b>' + htmlEncode(data.ps) + '</p>\
                         <p><b>大小：</b>' + toSize(data.size) + '</p>\
-                        <p><b>作者：</b>' + data.author + '</p>\
-                        <p><b>来源：</b><a class="btlink" href="'+data.home+'" target="_blank">' + data.home + '</a></p>\
+                        <p><b>作者：</b>' + htmlEncode(data.author) + '</p>\
+                        <p><b>来源：</b><a class="btlink" href="'+htmlEncode(data.home)+'" target="_blank">' + htmlEncode(data.home) + '</a></p>\
                     </div>\
                     <ul class="help-info-text c7">\
                         <li style="color:red;">此为第三方开发的插件，无法验证其可靠性!</li>\
                         <li>安装过程可能需要几分钟时间，请耐心等候!</li>\
                         <li>如果已存在此插件，将被替换!</li>\
                     </ul>\
-                    <div class="bt-form-submit-btn"><button type="button" class="btn btn-sm btn-danger mr5" onclick="layer.closeAll()">取消</button><button type="button" class="btn btn-sm btn-success" onclick="importPluginInstall(\''+ data.name + '\',\'' + data.tmp_path +'\')">确定安装</button></div>\
+                    <div class="bt-form-submit-btn"><button type="button" class="btn btn-sm btn-danger mr5" onclick="layer.closeAll()">取消</button><button type="button" class="btn btn-sm btn-success" onclick="importPluginInstall(\''+ jsEncode(data.name) + '\',\'' + jsEncode(data.tmp_path) +'\')">确定安装</button></div>\
                 </div>'
             });
 
@@ -538,6 +556,11 @@ function importPluginInstall(plugin_name, tmp_path) {
 
 $(function() {
     if (window.document.location.pathname == '/soft/') {
-        setInterval(function() { getSList(); }, 8000);
+        // 页面隐藏(document.hidden)时跳过本次轮询, 减少后台标签页无效请求
+        setInterval(function() {
+            if (!document.hidden) {
+                getSList();
+            }
+        }, 8000);
     }
 });

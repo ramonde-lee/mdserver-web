@@ -5,6 +5,50 @@ $(document).ready(function() {
 	});
 });
 
+/**
+ * HTML 转义: 用于把动态数据拼进 HTML 文本/属性时, 防止 XSS 注入
+ * 例: '<td>' + htmlEncode(name) + '</td>'
+ *     '<input value="' + htmlEncode(val) + '">'
+ */
+function htmlEncode(s) {
+	if (s === null || typeof s === 'undefined') {
+		return '';
+	}
+	return String(s).replace(/[&<>"']/g, function (c) {
+		return {
+			'&': '&amp;',
+			'<': '&lt;',
+			'>': '&gt;',
+			'"': '&quot;',
+			"'": '&#39;'
+		}[c];
+	});
+}
+
+/**
+ * JS 字符串转义: 用于拼进内联事件 (onclick="fn('...')") 的 JS 字符串字面量
+ * 输出统一使用 \x / \u 十六进制转义, 不残留任何 HTML 元字符, 避免二次解码
+ * 例: onclick="fn(\'' + jsEncode(name) + '\')"
+ */
+function jsEncode(s) {
+	if (s === null || typeof s === 'undefined') {
+		return '';
+	}
+	return String(s).replace(/[\\'"<>&\r\n\u2028\u2029]/g, function (c) {
+		switch (c) {
+			case '\\': return '\\\\';
+			case "'": return "\\'";
+			case '"': return '\\"';
+			case '\r': return '\\r';
+			case '\n': return '\\n';
+			case '<': return '\\x3c';
+			case '>': return '\\x3e';
+			case '&': return '\\x26';
+			default: return '\\u' + ('0000' + c.charCodeAt(0).toString(16)).slice(-4);
+		}
+	});
+}
+
 function toSize(a) {
 	var d = [" B", " KB", " MB", " GB", " TB", " PB"];
 	var e = 1024;
@@ -451,11 +495,11 @@ function getDiskList(b) {
 			}
 
 			d += "<tr>\
-				<td onclick=\"getDiskList('" + h.path + "/" + g[0] + "')\" title='" + g[0] + "'>\
-					<span class='glyphicon glyphicon-folder-open'></span>" + e + "</td><td>" + getLocalTime(g[2]) + "</td>\
-				<td>" + g[3] + "</td>\
-				<td>" + g[4] + "</td>\
-				<td><span class='delfile-btn' onclick=\"newDelFile('" + h.path + "/" + g[0] + "')\">X</span></td>\
+				<td onclick=\"getDiskList('" + jsEncode(h.path + "/" + g[0]) + "')\" title='" + htmlEncode(g[0]) + "'>\
+					<span class='glyphicon glyphicon-folder-open'></span>" + htmlEncode(e) + "</td><td>" + getLocalTime(g[2]) + "</td>\
+				<td>" + htmlEncode(g[3]) + "</td>\
+				<td>" + htmlEncode(g[4]) + "</td>\
+				<td><span class='delfile-btn' onclick=\"newDelFile('" + jsEncode(h.path + "/" + g[0]) + "')\">X</span></td>\
 			</tr>";
 		}
 		if(h.files != null && h.files != "") {
@@ -473,10 +517,10 @@ function getDiskList(b) {
 				}
 
 				d += "<tr>\
-					<td title='" + g[0] + "'><span class='glyphicon glyphicon-file'></span>" + e + "</td>\
+					<td title='" + htmlEncode(g[0]) + "'><span class='glyphicon glyphicon-file'></span>" + htmlEncode(e) + "</td>\
 					<td>" + getLocalTime(g[2]) + "</td>\
-					<td>" + g[3] + "</td>\
-					<td>" + g[4] + "</td>\
+					<td>" + htmlEncode(g[3]) + "</td>\
+					<td>" + htmlEncode(g[4]) + "</td>\
 					<td></td>\
 				</tr>";
 			}
@@ -487,7 +531,7 @@ function getDiskList(b) {
 		if(h.path.substr(h.path.length - 1, 1) != "/") {
 			h.path += "/";
 		}
-		$("#PathPlace").find("span").html(h.path);
+		$("#PathPlace").find("span").html(htmlEncode(h.path));
 		activeDisk();
 		return;
 	},'json');
@@ -1050,9 +1094,18 @@ function getTaskCount() {
 	},'json');
 }
 getTaskCount();
-setInterval(function(){
-	getTaskCount();
-},6000);
+// 用 setTimeout 链 + 完成回调替代 setInterval, 防止请求堆积; 页面隐藏时跳过
+(function taskCountPoll(){
+	if (!document.hidden) {
+		$.get("/task/count", '', function(data) {
+			$(".task").text(data.data);
+		},'json').always(function(){
+			setTimeout(taskCountPoll, 6000);
+		});
+	} else {
+		setTimeout(taskCountPoll, 6000);
+	}
+})();
 
 function setSelectChecked(c, d) {
 	var a = document.getElementById(c);
@@ -1196,9 +1249,9 @@ function getPanelList(){
 		var rdata = rdata.data;
 
 		for(var i=0; i<rdata.length; i++){
-			con +='<h3 class="mypcip mypcipnew" style="opacity:.6;cursor: pointer;" data-url="'+rdata[i].url+'" data-user="'+rdata[i].username+'" data-pw="'+rdata[i].password+'">\
-				<span class="f14 cw">'+rdata[i].title+'</span>\
-				<em class="btedit" onclick="bindPanel(0,\'c\',\''+rdata[i].title+'\',\''+rdata[i].id+'\',\''+rdata[i].url+'\',\''+rdata[i].username+'\',\''+rdata[i].password+'\')"></em>\
+			con +='<h3 class="mypcip mypcipnew" style="opacity:.6;cursor: pointer;" data-id="'+htmlEncode(rdata[i].id)+'" data-url="'+htmlEncode(rdata[i].url)+'">\
+				<span class="f14 cw">'+htmlEncode(rdata[i].title)+'</span>\
+				<em class="btedit" onclick="bindPanel(0,\'c\',\''+jsEncode(rdata[i].title)+'\',\''+jsEncode(rdata[i].id)+'\',\''+jsEncode(rdata[i].url)+'\',\''+jsEncode(rdata[i].username)+'\',\''+jsEncode(rdata[i].password)+'\')"></em>\
 				</h3>';
 		}
 
@@ -1208,27 +1261,21 @@ function getPanelList(){
 		},function(){
 			$(this).css("opacity",".6");
 		}).click(function(){
-			// $("#panel_form").remove();
+			// 通过登录密钥向目标面板换取一次性票据后跳转,
+			// 密码/密钥不会出现在浏览器 URL 中
+			var pid = $(this).attr("data-id");
 			var murl = $(this).attr("data-url");
-			var user = $(this).attr("data-user");
-			var pw = $(this).attr("data-pw");
-
-			var random_str = getRandomString(8);
-
-			var timestamp = Date.parse(new Date());
-			var data = {
-				'rand':random_str,
-				'username':user,
-				'password':pw,
-				'time':timestamp
-			};
-
-
-			data_json =JSON.stringify(data);
-			login_args = base64_encode(data_json);
-
-			endpoint_url = murl + '?login='+login_args;
-			window.open(endpoint_url);
+			$.post("/setting/panel_quick_login", "id=" + encodeURIComponent(pid), function(rdata) {
+				if (rdata.status && rdata.data && rdata.data.url) {
+					window.open(rdata.data.url);
+					return;
+				}
+				layer.msg(rdata.msg || '快捷登录失败', {icon: 2});
+				if (murl) {
+					window.open(murl);
+				}
+			}, 'json');
+			return;
 			// layer.open({
 			// 	type: 2,
 			// 	title: false,
@@ -1270,9 +1317,9 @@ function bindPanel(a,type,ip,btid,url,user,pw){
 	if(type == "b"){
 		btn = "<button type='button' class='btn btn-success btn-sm' onclick=\"bindPanel(1,'b')\">添加</button>";
 	} else {
-		titleName = '修改关联' + ip;
-		btn = "<button type='button' class='btn btn-default btn-sm' onclick=\"bindPaneldel('"+btid+"')\">删除</button>\
-		<button type='button' class='btn btn-success btn-sm' onclick=\"bindPanel(1,'c','"+ip+"','"+btid+"')\" style='margin-left:7px'>修改</button>";
+		titleName = '修改关联' + htmlEncode(ip);
+		btn = "<button type='button' class='btn btn-default btn-sm' onclick=\"bindPaneldel('"+jsEncode(btid)+"')\">删除</button>\
+		<button type='button' class='btn btn-success btn-sm' onclick=\"bindPanel(1,'c','"+jsEncode(ip)+"','"+jsEncode(btid)+"')\" style='margin-left:7px'>修改</button>";
 	}
 	if(url == undefined) url="http://";
 	if(user == undefined) user="";
@@ -1285,11 +1332,10 @@ function bindPanel(a,type,ip,btid,url,user,pw){
 			layer.msg('面板地址格式不正确，示例：<p>http://192.168.0.1:8888</p>',{icon:5,time:5000});
 			return;
 		}
-		var btuser = encodeURIComponent($("#btuser").val());
 		var btpassword = encodeURIComponent($("#btpassword").val());
 		var bttitle = $("#bttitle").val();
-		var data = "title="+bttitle+"&url="+encodeURIComponent(btaddress)+"&username="+btuser+"&password="+btpassword;
-		if(btaddress =="" || btuser=="" || btpassword=="" || bttitle==""){
+		var data = "title="+bttitle+"&url="+encodeURIComponent(btaddress)+"&username=&password="+btpassword;
+		if(btaddress =="" || btpassword=="" || bttitle==""){
 			layer.msg(lan.bt.panel_err_empty,{icon:8});
 			return;
 		}
@@ -1317,20 +1363,18 @@ function bindPanel(a,type,ip,btid,url,user,pw){
 		shadeClose: false,
 		content: "<div class='bt-form pd20 pb70'>\
 				<div class='line'><span class='tname'>面板地址</span>\
-				<div class='info-r'><input class='bt-input-text' type='text' name='btaddress' id='btaddress' value='"+url+"' placeholder='面板地址' style='width:100%'/></div>\
+				<div class='info-r'><input class='bt-input-text' type='text' name='btaddress' id='btaddress' value='"+htmlEncode(url)+"' placeholder='面板地址' style='width:100%'/></div>\
 				</div>\
-				<div class='line'><span class='tname'>用户名</span>\
-				<div class='info-r'><input class='bt-input-text' type='text' name='btuser' id='btuser' value='"+user+"' placeholder='用户名' style='width:100%'/></div>\
-				</div>\
-				<div class='line'><span class='tname'>密码</span>\
-				<div class='info-r'><input class='bt-input-text' type='password' name='btpassword' id='btpassword' value='"+pw+"' placeholder='密码' style='width:100%'/></div>\
+				<div class='line'><span class='tname'>登录密钥</span>\
+				<div class='info-r'><input class='bt-input-text' type='text' name='btpassword' id='btpassword' value='"+htmlEncode(pw)+"' placeholder='目标面板的快捷登录密钥' style='width:100%'/></div>\
 				</div>\
 				<div class='line'><span class='tname'>备注</span>\
-				<div class='info-r'><input class='bt-input-text' type='text' name='bttitle' id='bttitle' value='"+ip+"' placeholder='备注' style='width:100%'/></div>\
+				<div class='info-r'><input class='bt-input-text' type='text' name='bttitle' id='bttitle' value='"+htmlEncode(ip)+"' placeholder='备注' style='width:100%'/></div>\
 				</div>\
 				<div class='line'><ul class='help-info-text c7'>\
 					<li>收藏其它服务器面板资料，实现一键登录面板功能</li><li>面板备注不可重复</li>\
-					<li><font style='color:red'>注意，开启广告拦截会导致无法快捷登录。</font></li></ul>\
+					<li>登录密钥请在目标面板『面板设置 - 快捷登录密钥』中复制</li>\
+					<li><font style='color:red'>目标面板开启二次验证时无法快捷登录。</font></li></ul>\
 				</div>\
 				<div class='bt-form-submit-btn'><button type='button' class='btn btn-danger btn-sm' onclick=\"layer.closeAll()\">关闭</button> "+btn+"</div>\
 			</div>",
@@ -1369,6 +1413,47 @@ function bindPaneldel(id){
 	},'json');
 }
 
+// 快捷登录密钥: 显示/复制/重置
+var quickLoginKey = '';
+function getQuickLoginKeyInfo(){
+	$.post('/setting/get_quick_login_key', {}, function(rdata){
+		if(!rdata.status){
+			layer.msg(rdata.msg || '获取失败', {icon: 2});
+			return;
+		}
+		quickLoginKey = rdata.data || '';
+		$('#quick_login_key').val(quickLoginKey);
+	}, 'json');
+}
+function copyQuickLoginKey(){
+	if(quickLoginKey == ''){
+		layer.msg('请先点击显示', {icon: 8});
+		return;
+	}
+	var input = document.getElementById('quick_login_key');
+	input.select();
+	try {
+		document.execCommand('copy');
+		layer.msg('已复制', {icon: 1});
+	} catch(e) {
+		layer.msg('复制失败, 请手动复制', {icon: 2});
+	}
+}
+function resetQuickLoginKey(){
+	layer.confirm('重置后, 其它面板中已配置的登录密钥将失效, 确定继续?', function(idx){
+		layer.close(idx);
+		$.post('/setting/reset_quick_login_key', {}, function(rdata){
+			if(!rdata.status){
+				layer.msg(rdata.msg || '重置失败', {icon: 2});
+				return;
+			}
+			quickLoginKey = rdata.data || '';
+			$('#quick_login_key').val(quickLoginKey);
+			layer.msg('重置成功', {icon: 1});
+		}, 'json');
+	});
+}
+
 function getSpeed(sele){
 	if(!$(sele)) {
 		return;
@@ -1382,7 +1467,7 @@ function getSpeed(sele){
 		if(speed.speed > 0){
 			mspeed = '<span class="pull-right">'+toSize(speed.speed)+'/s</span>';
 		}
-		var body = '<p>'+speed.title+' <img src="/static/img/ing.gif"></p>\
+		var body = '<p>'+htmlEncode(speed.title)+' <img src="/static/img/ing.gif"></p>\
 		<div class="bt-progress"><div class="bt-progress-bar" style="width:'+speed.progress+'%"><span class="bt-progress-text">'+speed.progress+'%</span></div></div>\
 		<p class="f12 c9"><span class="pull-left">'+speed.used+'/'+speed.total+'</span>'+mspeed+'</p>';
 		$(sele).prev().hide();
@@ -1498,12 +1583,12 @@ function remind(a){
 			e += '<tr>\
 				<td><input type="checkbox"></td>\
 				<td>\
-					<div class="titlename c3">'+g.data[d].name+'</span>\
+					<div class="titlename c3">'+htmlEncode(g.data[d].name)+'</span>\
 						<span class="rs-status">【'+status_text+'】<span>\
 						<span class="rs-time">'+cos_text+'</span>\
 					</div>\
 				</td>\
-				<td class="text-right c3">'+g.data[d].add_time+'</td>\
+				<td class="text-right c3">'+htmlEncode(g.data[d].add_time)+'</td>\
 			</tr>';
 		}
 		var con = '<div class="divtable"><table class="table table-hover">\
@@ -1573,14 +1658,14 @@ function getReloads() {
 						}
 						if(h.task[g].name.indexOf("扫描") != -1) {
 							b = "<li>\
-								<span class='titlename'>" + h.task[g].name + "</span>\
+								<span class='titlename'>" + htmlEncode(h.task[g].name) + "</span>\
 								<span class='state'>正在扫描<img src='/static/img/ing.gif'> | <a href=\"javascript:removeTask(" + h.task[g].id + ")\">关闭</a></span>\
 								<span class='opencmd'></span>\
 								<div class='cmd'>" + c + "</div>\
 							</li>";
 						} else {
 							b = "<li>\
-								<span class='titlename'>" + h.task[g].name + "</span>\
+								<span class='titlename'>" + htmlEncode(h.task[g].name) + "</span>\
 								<span class='state'>正在安装<img src='/static/img/ing.gif'> | <a href=\"javascript:removeTask(" + h.task[g].id + ")\">关闭</a></span>\
 								<div class='cmd'>" + c + "</div>\
 							</li>";
@@ -1588,13 +1673,13 @@ function getReloads() {
 					} else {
 						b = "<li>\
 								<div class='line-progress' style='width:" + h.msg.pre + "%'></div>\
-								<span class='titlename'>" + h.task[g].name + "<a style='margin-left:130px;'>" + (toSize(h.msg.used) + "/" + toSize(h.msg.total)) + "</a></span>\
+								<span class='titlename'>" + htmlEncode(h.task[g].name) + "<a style='margin-left:130px;'>" + (toSize(h.msg.used) + "/" + toSize(h.msg.total)) + "</a></span>\
 								<span class='com-progress'>" + h.msg.pre + "%</span>\
 								<span class='state'>下载中<img src='/static/img/ing.gif'> | <a href=\"javascript:removeTask(" + h.task[g].id + ")\">"+lan.public.close+"</a></span>\
 							</li>"
 					}
 				} else {
-					d += "<li><span class='titlename'>" + h.task[g].name + "</span><span class='state'>等待 | <a style='color:green' href=\"javascript:removeTask(" + h.task[g].id + ')">删除</a></span></li>'
+					d += "<li><span class='titlename'>" + htmlEncode(h.task[g].name) + "</span><span class='state'>等待 | <a style='color:green' href=\"javascript:removeTask(" + h.task[g].id + ')">删除</a></span></li>'
 				}
 			}
 			$("#task").text(h.count);
@@ -1838,7 +1923,7 @@ function webShell() {
 
 
             var menudiv = '<ul class="contextmenu">\
-                        <li><a class="shell_copy_btn menu_ssh" data-clipboard-text="'+ selectText + '" ' + style_str + '>复制到剪切板</a></li>\
+                        <li><a class="shell_copy_btn menu_ssh" data-clipboard-text="'+ htmlEncode(selectText) + '" ' + style_str + '>复制到剪切板</a></li>\
                         <li><a  onclick="shell_paste_text()" '+ paste_str+'>粘贴选中项</a></li>\
                         <li><a onclick="shell_to_baidu()" ' + style_str + '>百度搜索</a></li>\
                     </ul>';
@@ -2193,9 +2278,9 @@ function pluginSetService(_name ,status, version, _suffix_name=''){
         '</span><span style="color: '+
         (status?'#20a53a;':'red;')+
         ' margin-left: 3px;" class="glyphicon ' + (status?'glyphicon glyphicon-play':'glyphicon-pause')+'"></span></p><div class="sfm-opt">\
-            <button class="btn btn-default btn-sm" onclick="pluginOpService(\''+_name+'\',\''+status_ss+'\',\''+version+'\',\''+_suffix_name+'\')">'+(status?'停止':'启动')+'</button>\
-            <button class="btn btn-default btn-sm" onclick="pluginOpService(\''+_name+'\',\''+restart_name+'\',\''+version+'\',\''+_suffix_name+'\')">重启</button>\
-            <button class="btn btn-default btn-sm" onclick="pluginOpService(\''+_name+'\',\''+reload_name+'\',\''+version+'\',\''+_suffix_name+'\')">重载配置</button>\
+            <button class="btn btn-default btn-sm" onclick="pluginOpService(\''+jsEncode(_name)+'\',\''+jsEncode(status_ss)+'\',\''+jsEncode(version)+'\',\''+jsEncode(_suffix_name)+'\')">'+(status?'停止':'启动')+'</button>\
+            <button class="btn btn-default btn-sm" onclick="pluginOpService(\''+jsEncode(_name)+'\',\''+jsEncode(restart_name)+'\',\''+jsEncode(version)+'\',\''+jsEncode(_suffix_name)+'\')">重启</button>\
+            <button class="btn btn-default btn-sm" onclick="pluginOpService(\''+jsEncode(_name)+'\',\''+jsEncode(reload_name)+'\',\''+jsEncode(version)+'\',\''+jsEncode(_suffix_name)+'\')">重载配置</button>\
         </div>'; 
     $(".soft-man-con").html(serviceCon);
 }
@@ -2652,7 +2737,7 @@ function pluginSetInitD(_name, _version, status,_suffix_name=''){
         '</span><span style="color: '+
         (status?'#20a53a;':'red;')+
         ' margin-left: 3px;" class="glyphicon ' + (status?'glyphicon glyphicon-play':'glyphicon-pause')+'"></span></p><div class="sfm-opt">\
-            <button class="btn btn-default btn-sm" onclick="pluginOpInitD(\''+_name+'\',\''+_version+'\',\''+default_name+'\',\''+_suffix_name+'\')">'+(status?'卸载':'加载')+'</button>\
+            <button class="btn btn-default btn-sm" onclick="pluginOpInitD(\''+jsEncode(_name)+'\',\''+jsEncode(_version)+'\',\''+jsEncode(default_name)+'\',\''+jsEncode(_suffix_name)+'\')">'+(status?'卸载':'加载')+'</button>\
         </div>'; 
     $(".soft-man-con").html(serviceCon);
 }
@@ -2725,7 +2810,7 @@ function pluginLogsContent(_name, version, func, line){
 		}catch(err){/*console.log(err);*/}
         var content = data.data;
         var h =  parseInt($('.bt-w-menu').css('height')) - 40;
-            var ebody = '<textarea readonly="" style="margin: 0px;height: '+h+'px;width: 100%;background-color: #333;color:#fff; padding:0 5px" id="info_log">'+content+'</textarea>';
+            var ebody = '<textarea readonly="" style="margin: 0px;height: '+h+'px;width: 100%;background-color: #333;color:#fff; padding:0 5px" id="info_log">'+htmlEncode(content)+'</textarea>';
             $(".soft-man-con").html(ebody);
             var ob = document.getElementById('info_log');
             ob.scrollTop = ob.scrollHeight; 
@@ -2891,7 +2976,20 @@ function pluginStandAloneLogs(_name, version, func, _args, line){
 /*** 其中功能,针对插件通过库使用 end ***/
 
 $(function() {
-	setInterval(function(){check_login();},6000);
+	// 登录态轮询: 用 setTimeout 链 + 完成回调替代 setInterval, 防堆积; 页面隐藏时跳过
+	(function checkLoginPoll(){
+		if (!document.hidden) {
+			$.post('/check_login', {}, function(rdata){
+				if(!rdata.status){
+					location.reload();
+				}
+			},'json').always(function(){
+				setTimeout(checkLoginPoll, 6000);
+			});
+		} else {
+			setTimeout(checkLoginPoll, 6000);
+		}
+	})();
 	autoHeight();
 });
 $(window).resize(function() {

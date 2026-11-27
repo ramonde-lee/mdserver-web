@@ -125,12 +125,12 @@ function getDiskInfo() {
             //判断inode信息是否存在
             var inodes = '';
             if ( typeof(rdata[i]['inodes']) !=='undefined' ){
-                inodes = '<div class="mask" style="color:' + LoadColor + '" data="Inode信息<br>总数：' + rdata[i].inodes[0] + '<br>已使用：' + rdata[i].inodes[1] + '<br>可用：' + rdata[i].inodes[2] + '<br>Inode使用率：' + rdata[i].inodes[3] + '"><span>' + rdata[i].size[3].replace('%', '') + '</span>%</div>';
+                inodes = '<div class="mask" style="color:' + LoadColor + '" data="Inode信息<br>总数：' + htmlEncode(rdata[i].inodes[0]) + '<br>已使用：' + htmlEncode(rdata[i].inodes[1]) + '<br>可用：' + htmlEncode(rdata[i].inodes[2]) + '<br>Inode使用率：' + htmlEncode(rdata[i].inodes[3]) + '"><span>' + rdata[i].size[3].replace('%', '') + '</span>%</div>';
 
                 var ipre = parseInt(rdata[i].inodes[3].replace('%', ''));
                 if (ipre > 95) {
                     $("#messageError").show();
-                    $("#messageError").append('<p><span class="glyphicon glyphicon-alert" style="color: #ff4040; margin-right: 10px;"></span>分区[' + rdata[i].path + ']当前Inode使用率超过' + ipre + '%，当使用率满100%时将无法在此分区创建文件，请及时清理!<a class="btlink" href="javascript:ClearSystem();">[清理垃圾]</a></p>');
+                    $("#messageError").append('<p><span class="glyphicon glyphicon-alert" style="color: #ff4040; margin-right: 10px;"></span>分区[' + htmlEncode(rdata[i].path) + ']当前Inode使用率超过' + ipre + '%，当使用率满100%时将无法在此分区创建文件，请及时清理!<a class="btlink" href="javascript:ClearSystem();">[清理垃圾]</a></p>');
                 }
             }
 
@@ -142,12 +142,12 @@ function getDiskInfo() {
             }
             disk_type = '';
             if ( 'type' in  rdata[i]){
-                disk_type = '<sup style="color: #20a53a;" title="'+rdata[i]['type']+'">'+rdata[i]['type']+'</sup>';
+                disk_type = '<sup style="color: #20a53a;" title="'+htmlEncode(rdata[i]['type'])+'">'+htmlEncode(rdata[i]['type'])+'</sup>';
             }
             // console.log(disk_type);
            
             dBody = '<li class="col-xs-6 col-sm-3 col-md-3 col-lg-2 mtb20 circle-box text-center diskbox">' +
-                '<h3 class="c5 f15">' + rdata[i].path + '</h3>' +
+                '<h3 class="c5 f15">' + htmlEncode(rdata[i].path) + '</h3>' +
                 '<div class="circle" style="background:' + LoadColor + '">' +
                 '<div class="pie_left">' +
                 '<div class="left"></div>' +
@@ -155,7 +155,7 @@ function getDiskInfo() {
                 '<div class="pie_right">' +
                 '<div class="right"></div>' +
                 '</div>'+ inodes +'</div>' +
-                '<h4 class="c5 f15">' + rdata[i].size[1] + '/' + rdata[i].size[0] + disk_type +'</h4>' +
+                '<h4 class="c5 f15">' + htmlEncode(rdata[i].size[1]) + '/' + htmlEncode(rdata[i].size[0]) + disk_type +'</h4>' +
                 '</li>'
             $("#systemInfoList").append(dBody);
             setImg();
@@ -451,27 +451,31 @@ function netImg() {
     };
 
     var echartsNetImg = echarts.init(document.getElementById('netImg'));
-    setInterval(function() {
-        getNet();
-        addData(true);
-        echartsNetImg.setOption({
-            yAxis: {
-                name:  '单位 '+ default_unit,
-                splitLine: { lineStyle: { color: "#eee" } },
-                axisLine: { lineStyle: { color: "#666" } }
-            },
-            xAxis: {
-                data: xData
-            },
-            series: [{
-                name: lan.index.net_up,
-                data: yData
-            }, {
-                name: lan.index.net_down,
-                data: zData
-            }]
-        });
-    }, 3000);
+    // 图表渲染轮询: 数据由 index.task() 统一拉取, 这里只渲染 echarts, 避免重复请求 /system/network
+    // 页面隐藏(document.hidden)时跳过本轮, 节省服务器资源
+    (function netImgPoll(){
+        if (!document.hidden) {
+            addData(true);
+            echartsNetImg.setOption({
+                yAxis: {
+                    name:  '单位 '+ default_unit,
+                    splitLine: { lineStyle: { color: "#eee" } },
+                    axisLine: { lineStyle: { color: "#666" } }
+                },
+                xAxis: {
+                    data: xData
+                },
+                series: [{
+                    name: lan.index.net_up,
+                    data: yData
+                }, {
+                    name: lan.index.net_down,
+                    data: zData
+                }]
+            });
+        }
+        setTimeout(netImgPoll, 3000);
+    })();
 
     // 使用刚指定的配置项和数据显示图表。
     echartsNetImg.setOption(option);
@@ -562,7 +566,7 @@ function updateMsg(){
                     +'<p style="padding: 0 0 10px;line-height: 24px;">'+rdata.data.content+'</p>'
                     +'<div class="bt-form-submit-btn">'
                     +'<button type="button" class="btn btn-danger btn-sm btn-title" onclick="layer.closeAll()">取消</button>'
-                    +'<button type="button" class="btn btn-success btn-sm btn-title" onclick="updateVersion(\''+rdata.data.version+'\')" >立即更新</button>'
+                    +'<button type="button" class="btn btn-success btn-sm btn-title" onclick="updateVersion(\''+jsEncode(rdata.data.version)+'\')" >立即更新</button>'
                     +'</div>'
                     +'</div>'
         });
@@ -718,12 +722,12 @@ function getWarning() {
             var btns = '';
             for (var n = 0; n < wlist.data[i].btns.length; n++) {
                 if (wlist.data[i].btns[n].type == 'javascript') {
-                    btns += '<a href="javascript:WarningTo(\'' + wlist.data[i].btns[n].url + '\',' + wlist.data[i].btns[n].reload + ');" class="' + wlist.data[i].btns[n].class + '"> ' + wlist.data[i].btns[n].title + '</a>'
+                    btns += '<a href="javascript:WarningTo(\'' + jsEncode(wlist.data[i].btns[n].url) + '\',' + wlist.data[i].btns[n].reload + ');" class="' + htmlEncode(wlist.data[i].btns[n].class) + '"> ' + htmlEncode(wlist.data[i].btns[n].title) + '</a>'
                 } else {
-                    btns += '<a href="' + wlist.data[i].btns[n].url + '" class="' + wlist.data[i].btns[n].class + '" target="' + wlist.data[i].btns[n].target + '"> ' + wlist.data[i].btns[n].title + '</a>'
+                    btns += '<a href="' + htmlEncode(wlist.data[i].btns[n].url) + '" class="' + htmlEncode(wlist.data[i].btns[n].class) + '" target="' + htmlEncode(wlist.data[i].btns[n].target) + '"> ' + htmlEncode(wlist.data[i].btns[n].title) + '</a>'
                 }
             }
-            $("#messageError").append('<p><img src="' + wlist.icon[wlist.data[i].icon] + '" style="margin-right:14px;vertical-align:-3px">' + wlist.data[i].body + btns + '</p>');
+            $("#messageError").append('<p><img src="' + htmlEncode(wlist.icon[wlist.data[i].icon]) + '" style="margin-right:14px;vertical-align:-3px">' + wlist.data[i].body + btns + '</p>');
             num++;
         }
         if (num > 0) $("#messageError").show();
@@ -785,26 +789,26 @@ function pluginInit(){
             var ver = rdata[i]['versions'];
             var select_list = '';
             if (typeof(ver)=='string'){
-                select_list = '<option value="' + ver +'">' + rdata[i]['title'] + ' - ' + ver + '</option>';
+                select_list = '<option value="' + htmlEncode(ver) +'">' + htmlEncode(rdata[i]['title']) + ' - ' + htmlEncode(ver) + '</option>';
             } else {
                 for (var vi = 0; vi < ver.length; vi++) {
 
                     if (ver[vi] == rdata[i]['default_ver']){
-                        select_list += '<option value="'+ver[vi]+'" selected="selected">'+ rdata[i]['title'] + ' - '+ ver[vi] + '</option>';
+                        select_list += '<option value="'+htmlEncode(ver[vi])+'" selected="selected">'+ htmlEncode(rdata[i]['title']) + ' - '+ htmlEncode(ver[vi]) + '</option>';
                     } else {
-                        select_list += '<option value="'+ver[vi]+'">'+ rdata[i]['title'] + ' - '+ ver[vi] + '</option>';
+                        select_list += '<option value="'+htmlEncode(ver[vi])+'">'+ htmlEncode(rdata[i]['title']) + ' - '+ htmlEncode(ver[vi]) + '</option>';
                     }
                 }
             }
 
-            var pn_checked = '<input id="data_'+rdata[i]['name']+'" type="checkbox" checked>';
+            var pn_checked = '<input id="data_'+htmlEncode(rdata[i]['name'])+'" type="checkbox" checked>';
             if (rdata[i]['name'] == 'swap'){
-                var pn_checked = '<input id="data_'+rdata[i]['name']+'" type="checkbox" disabled="disabled" checked>';
+                var pn_checked = '<input id="data_'+htmlEncode(rdata[i]['name'])+'" type="checkbox" disabled="disabled" checked>';
             }
             
-            plugin_list += '<li><span class="ico"><img src="/plugins/file?name='+rdata[i]['name']+'&f=ico.png"></span>\
+            plugin_list += '<li><span class="ico"><img src="/plugins/file?name='+htmlEncode(rdata[i]['name'])+'&f=ico.png"></span>\
             <span class="name">\
-                <select id="select_'+rdata[i]['name']+'" class="sl-s-info">'+select_list+'</select>\
+                <select id="select_'+htmlEncode(rdata[i]['name'])+'" class="sl-s-info">'+select_list+'</select>\
             </span>\
             <span class="pull-right">'+pn_checked+'</span></li>';
         }
@@ -884,8 +888,8 @@ function loadKeyDataCount(){
                     return;
                 }
                 var html = '<li class="sys-li-box col-xs-3 col-sm-3 col-md-3 col-lg-3">\
-                        <p class="name f15 c9">'+pname+'</p>\
-                        <div class="val"><a class="btlink" onclick="softMain(\''+pname+'\',\''+pname+'\',\''+rdata['data']['ver']+'\')">'+rdata['data']['count']+'</a></div>\
+                        <p class="name f15 c9">'+htmlEncode(pname)+'</p>\
+                        <div class="val"><a class="btlink" onclick="softMain(\''+jsEncode(pname)+'\',\''+jsEncode(pname)+'\',\''+jsEncode(rdata['data']['ver'])+'\')">'+htmlEncode(rdata['data']['count'])+'</a></div>\
                     </li>';
                 $('#index_overview').append(html);
             },'json');
@@ -1184,9 +1188,9 @@ var index = {
                     if (name == 'ALL'){
                         option += '<option value="'+name+'">全部</option>';
                     } else if (network_io_key == name){
-                        option += '<option value="'+name+'" selected>'+name+'</option>';
+                        option += '<option value="'+htmlEncode(name)+'" selected>'+htmlEncode(name)+'</option>';
                     } else {
-                        option += '<option value="'+name+'">'+name+'</option>';
+                        option += '<option value="'+htmlEncode(name)+'">'+htmlEncode(name)+'</option>';
                     }
                 }
                 $('select[name="network-io"]').html(option);
@@ -1369,9 +1373,9 @@ var index = {
                     if (name == 'ALL'){
                         option += '<option value="'+name+'">全部</option>';
                     } else if (disk_io_key == name){
-                        option += '<option value="'+name+'" selected>'+name+'</option>';
+                        option += '<option value="'+htmlEncode(name)+'" selected>'+htmlEncode(name)+'</option>';
                     } else {
-                        option += '<option value="'+name+'">'+name+'</option>';
+                        option += '<option value="'+htmlEncode(name)+'">'+htmlEncode(name)+'</option>';
                     }
                 }
                 $('select[name="disk-io"]').html(option);
@@ -1456,10 +1460,59 @@ var index = {
         },'json');
     },
     task:function(){
-        // index.getData();
-        setInterval(function() {
-            index.getData();
-        }, 3000);
+        // 用 setTimeout 链 + 请求完成回调替代 setInterval, 防止请求堆积
+        // 页面隐藏(document.hidden)时跳过本次拉取, 减少无效请求
+        (function poll(){
+            if (document.hidden) {
+                setTimeout(poll, 3000);
+                return;
+            }
+            $.get("/system/network", function(net) {
+                // 复用 index.getData 的数据处理逻辑
+                if (typeof index !== 'undefined' && index.getData) {
+                    // 手动触发数据处理(模拟 getData 内部回调)
+                    var network_io_key = getCookie('network_io_key');
+                    var network_data = net.network;
+                    var network_select = network_data['ALL'];
+                    if (network_io_key && network_io_key != ''){
+                        network_select = network_data[network_io_key];
+                    }
+                    index.net.add(network_select.up,network_select.down);
+                    index.net.render();
+                    index.net.renderSelect(net);
+                    $("#upSpeed").html(toSize(network_select.up));
+                    $("#downSpeed").html(toSize(network_select.down));
+                    $("#downAll").html(toSize(network_select.downTotal));
+                    $("#downAll").attr('title','数据包:' + network_select.downPackets);
+                    $("#upAll").html(toSize(network_select.upTotal));
+                    $("#upAll").attr('title','数据包:' + network_select.upPackets);
+
+                    var disk_io_key = getCookie('disk_io_key');
+                    var iostat_data = net.iostat;
+                    var iostat_select = iostat_data['ALL'];
+                    if (disk_io_key && disk_io_key != ''){
+                        iostat_select = iostat_data[disk_io_key];
+                    }
+                    index.iostat.add(iostat_select.read_bytes,iostat_select.write_bytes, iostat_select);
+                    index.iostat.render();
+                    index.iostat.renderSelect(net);
+                    $("#readBytes").html(toSize(iostat_select.read_bytes));
+                    $("#writeBytes").html(toSize(iostat_select.write_bytes));
+                    $("#diskIops").html(iostat_select.read_count+":"+iostat_select.write_count+ " 次");
+                    $("#diskTime").html(iostat_select.read_time+":"+iostat_select.write_time +" ms");
+
+                    $("#core").html(net.cpu[1] + " " + lan.index.cpu_core);
+                    $("#state").html(net.cpu[0]);
+                    setcolor(net.cpu[0], "#state", 30, 70, 90);
+                    getLoad(net.load);
+                    setMemImg(net.mem);
+                    setImg();
+                    showCpuTips(net);
+                }
+            },'json').always(function(){
+                setTimeout(poll, 3000);  // 完成后再计下一次, 防堆积
+            });
+        })();
     },
     init: function(){
         index.net.init();

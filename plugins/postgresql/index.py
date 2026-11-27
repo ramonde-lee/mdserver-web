@@ -21,6 +21,30 @@ if os.path.exists(web_dir):
 import core.mw as mw
 
 
+def _dq(value):
+    """在 bash -c "..." 双引号上下文内安全嵌入动态值."""
+    return mw.quote(value).replace('\\', '\\\\').replace('"', '\\"').replace('$', '\\$').replace('`', '\\`')
+
+
+def _pwdq(value):
+    """PGPASSWORD='...' 位于 bash -c "..." 内, 同时适配外层双引号与内层单引号."""
+    return str(value).replace('\\', '\\\\').replace('"', '\\"').replace('$', '\\$').replace('`', '\\`').replace("'", "'\\''")
+
+
+def _tclEscape(value):
+    """转义 expect/Tcl 双引号字符串中的特殊字符."""
+    s = str(value)
+    return s.replace('\\', '\\\\').replace('"', '\\"').replace('$', '\\$').replace('[', '\\[').replace(']', '\\]')
+
+
+def _tclq(value):
+    """expect/Tcl 参数安全包裹, 避免 spawn 中的引号逃逸."""
+    s = str(value)
+    if re.match(r'^[\w@%+=:,./-]+$', s):
+        return s
+    return '"' + _tclEscape(s) + '"'
+
+
 if mw.isAppleSystem():
     cmd = 'ls /usr/local/lib/ | grep python  | cut -d \\  -f 1 | awk \'END {print}\''
     info = mw.execShell(cmd)
@@ -50,45 +74,11 @@ def getInitDFile():
         return '/tmp/' + getPluginName()
     return '/etc/init.d/' + getPluginName()
 
-
-def getArgs():
-    args = sys.argv[2:]
-
-    tmp = {}
-    args_len = len(args)
-
-    if args_len == 1:
-        t = args[0].strip().strip('{}').strip()
-        if t == '':
-            return tmp
-        arg_t = t.split(',')
-        for i in range(len(arg_t)):
-            kv = arg_t[i].split(':', 1)
-            if len(kv) < 2:
-                continue
-            tmp[kv[0].strip().strip('"\'')] = kv[1].strip().strip('"\'')
-    elif args_len > 1:
-        for i in range(len(args)):
-            kv = args[i].strip().strip('{}').split(':', 1)
-            if len(kv) < 2:
-                continue
-            tmp[kv[0].strip().strip('"\'')] = kv[1].strip().strip('"\'')
-
-    return tmp
-
-
 def getBackupDir():
     bk_path = mw.getBackupDir() + "/database/postgresql"
     if not os.path.isdir(bk_path):
         mw.execShell("mkdir -p {}".format(bk_path))
     return bk_path
-
-
-def checkArgs(data, ck=[]):
-    for i in range(len(ck)):
-        if not ck[i] in data:
-            return (False, mw.returnJson(False, '参数:(' + ck[i] + ')没有!'))
-    return (True, mw.returnJson(True, 'ok'))
 
 
 def getImportDir():
@@ -171,8 +161,8 @@ def setHbaAccess(name, access, user=''):
 
 
 def readConfigTpl():
-    args = getArgs()
-    data = checkArgs(args, ['file'])
+    args = mw.getPluginArgs()
+    data = mw.checkPluginArgs(args, ['file'])
     if not data[0]:
         return data[1]
 
@@ -414,11 +404,11 @@ def _psqlBase(psql_path, database, port, pg_pwd=None):
     """
     if pg_pwd is None:
         pg_pwd = pSqliteDb('config').where('id=?', (1,)).getField('pg_root') or ''
-    safe_pwd = pg_pwd.replace("'", "'\\''")
+    safe_pwd = _pwdq(pg_pwd)
     socket_dir = '/tmp'
     # psql 常用选项: -q 安静模式, --no-password 立即失败不挂起
     inner = "{} -U postgres -h {} -d {} -p {} -q --no-password".format(
-        psql_path, socket_dir, database, port)
+        psql_path, socket_dir, _dq(database), _dq(port))
     return "bash -c \"PGPASSWORD='{}' {}\"".format(safe_pwd, inner)
 
 def execShellPg(cmd):
@@ -443,7 +433,6 @@ def initPgData():
     return True
 
 def initPgPwd():
-
     serverdir = getServerDir()
     pwd = mw.getRandomString(16)
 
@@ -453,7 +442,7 @@ def initPgPwd():
         cmd_pass = 'su - postgres -c "' + cmd_pass + '"'
     data = mw.execShell(cmd_pass)
 
-    cmd_pass = "echo \"alter user postgres with password '" + pwd + "'\" | "
+    cmd_pass = "echo " + mw.quote("alter user postgres with password '" + pwd.replace("'", "''") + "'") + " | "
     if not mw.isAppleSystem():
         cmd = serverdir + '/bin/psql -d postgres'
         cmd_pass = cmd_pass + ' ' + pgCmd(cmd)
@@ -465,6 +454,7 @@ def initPgPwd():
     # print(data)
 
     pSqliteDb('config').where('id=?', (1,)).save('pg_root', (pwd,))
+    closePgTrust()
     return True
 
 
@@ -475,8 +465,9 @@ def pgOp(version, method):
     # print(cmd)
     try:
         isInited = initPgData()
-        initConfig(version)            
+        initConfig(version)
         if not isInited:
+            openPgTrust()
             if mw.isAppleSystem():
                 cmd_init_start = init_file + ' start'
                 subprocess.Popen(cmd_init_start, stdout=subprocess.PIPE, shell=True,
@@ -484,9 +475,11 @@ def pgOp(version, method):
 
                 time.sleep(6)
             else:
+
                 mw.execShell('systemctl start postgresql')
 
             initPgPwd()
+            closePgTrust()
 
             # 启用 pg_stat_statements 扩展
             try:
@@ -592,8 +585,8 @@ def getPgPort():
 
 
 def setPgPort():
-    args = getArgs()
-    data = checkArgs(args, ['port'])
+    args = mw.getPluginArgs()
+    data = mw.checkPluginArgs(args, ['port'])
     if not data[0]:
         return data[1]
 
@@ -1001,7 +994,8 @@ def pgSetDbStatus():
     保存pgsql性能调整信息
     '''
     names = [p[0] for p in PG_PERF_PARAMS]
-    args = getArgs()
+    args = mw.getPluginArgs()
+
     provided = [name for name in names if name in args]
     if not provided:
         return mw.returnJson(False, '没有需要保存的配置参数!')
@@ -1032,8 +1026,8 @@ def isPgError(msg):
     return None
 
 def setUserPwd(version=''):
-    args = getArgs()
-    data = checkArgs(args, ['password', 'name'])
+    args = mw.getPluginArgs()
+    data = mw.checkPluginArgs(args, ['password', 'name'])
     if not data[0]:
         return data[1]
 
@@ -1072,13 +1066,13 @@ def getDbBackupListFunc(dbname=''):
 
 
 def setDbBackup():
-    args = getArgs()
-    data = checkArgs(args, ['name'])
+    args = mw.getPluginArgs()
+    data = mw.checkPluginArgs(args, ['name'])
     if not data[0]:
         return data[1]
 
     head = "cd "+mw.getPanelDir()
-    cmd = head +' && . bin/activate &&  python3 plugins/postgresql/scripts/backup.py database ' + args['name'] + ' 3'
+    cmd = head +' && . bin/activate &&  python3 plugins/postgresql/scripts/backup.py database ' + mw.quote(args['name']) + ' 3'
     os.system(cmd)
     return mw.returnJson(True, 'ok')
 
@@ -1183,8 +1177,8 @@ def setRootPwdForce(new_password, version=''):
     return False
 
 def setPostgresPwd(version=''):
-    args = getArgs()
-    data = checkArgs(args, ['password'])
+    args = mw.getPluginArgs()
+    data = mw.checkPluginArgs(args, ['password'])
     if not data[0]:
         return data[1]
     password = args['password']
@@ -1213,8 +1207,8 @@ def setPostgresPwd(version=''):
 def importDbExternal():
     if isSlaveDb():
         return mw.returnJson(False, 'PG从库不能导入')
-    args = getArgs()
-    data = checkArgs(args, ['file', 'name'])
+    args = mw.getPluginArgs()
+    data = mw.checkPluginArgs(args, ['file', 'name'])
     if not data[0]:
         return data[1]
 
@@ -1242,18 +1236,18 @@ def importDbExternal():
     import_sql = ""
     if file.find("sql.gz") > -1:
         cmd = 'cd ' + import_dir + ' && gzip -dc ' + \
-            file + " > " + import_dir + tmpFile
+            mw.quote(file) + " > " + mw.quote(import_dir + tmpFile)
         info = mw.execShell(cmd)
         if info[1] == "":
             import_sql = import_dir + tmpFile
 
     if file.find(".zip") > -1:
-        cmd = 'cd ' + import_dir + ' && unzip -o ' + file
+        cmd = 'cd ' + import_dir + ' && unzip -o ' + mw.quote(file)
         mw.execShell(cmd)
         import_sql = import_dir + tmpFile
 
     if file.find("tar.gz") > -1:
-        cmd = 'cd ' + import_dir + ' && tar -zxvf ' + file
+        cmd = 'cd ' + import_dir + ' && tar -zxvf ' + mw.quote(file)
         mw.execShell(cmd)
         import_sql = import_dir + tmpFile
 
@@ -1269,7 +1263,7 @@ def importDbExternal():
     port = getPgPort()
 
     # 统一用 _psqlBase 构造带 PGPASSWORD + Unix socket 的命令, macOS/Linux 不分
-    cmd = '{} < "{}"'.format(_psqlBase(psql, name, port), import_sql)
+    cmd = '{} < {}'.format(_psqlBase(psql, name, port), mw.quote(import_sql))
     rdata = mw.execShell(cmd)
 
     if ext != 'sql' and os.path.exists(import_sql):
@@ -1283,8 +1277,8 @@ def importDbExternal():
 def importDbExternalProgress():
     if isSlaveDb():
         return mw.returnJson(False, 'slave', 'PG从库不能导入')
-    args = getArgs()
-    data = checkArgs(args, ['file', 'name'])
+    args = mw.getPluginArgs()
+    data = mw.checkPluginArgs(args, ['file', 'name'])
     if not data[0]:
         return data[1]
 
@@ -1292,15 +1286,15 @@ def importDbExternalProgress():
     name = args['name']
 
     cmd = 'cd ' + mw.getPanelDir() + ' && . bin/activate && '
-    cmd += 'python3 ' + mw.getPanelDir() + '/plugins/postgresql/index.py import_db_external_progress_bar {"file":"' + file + '","name":"' + name + '"}'
+    cmd += 'python3 ' + mw.getPanelDir() + '/plugins/postgresql/index.py import_db_external_progress_bar ' + mw.quote(json.dumps({'file': file, 'name': name}))
     return mw.returnJson(True, 'ok', cmd)
 
 def importDbExternalProgressBar():
     if isSlaveDb():
         print("PG从库不能导入!")
         return
-    args = getArgs()
-    data = checkArgs(args, ['file', 'name'])
+    args = mw.getPluginArgs()
+    data = mw.checkPluginArgs(args, ['file', 'name'])
     if not data[0]:
         return data[1]
 
@@ -1328,18 +1322,18 @@ def importDbExternalProgressBar():
     import_sql = ""
     if file.find("sql.gz") > -1:
         cmd = 'cd ' + import_dir + ' && gzip -dc ' + \
-            file + " > " + import_dir + tmpFile
+            mw.quote(file) + " > " + mw.quote(import_dir + tmpFile)
         info = mw.execShell(cmd)
         if info[1] == "":
             import_sql = import_dir + tmpFile
 
     if file.find(".zip") > -1:
-        cmd = 'cd ' + import_dir + ' && unzip -o ' + file
+        cmd = 'cd ' + import_dir + ' && unzip -o ' + mw.quote(file)
         mw.execShell(cmd)
         import_sql = import_dir + tmpFile
 
     if file.find("tar.gz") > -1:
-        cmd = 'cd ' + import_dir + ' && tar -zxvf ' + file
+        cmd = 'cd ' + import_dir + ' && tar -zxvf ' + mw.quote(file)
         mw.execShell(cmd)
         import_sql = import_dir + tmpFile
 
@@ -1355,7 +1349,7 @@ def importDbExternalProgressBar():
     port = getPgPort()
 
     # 统一用 _psqlBase, macOS/Linux 不分; bash -c 会继承父进程管道 stdin 给 psql
-    cmd = 'pv -t -p "{}" | {}'.format(import_sql, _psqlBase(psql, name, port))
+    cmd = 'pv -t -p {} | {}'.format(mw.quote(import_sql), _psqlBase(psql, name, port))
     print(cmd)
     os.system(cmd)
 
@@ -1367,8 +1361,8 @@ def importDbBackupProgress():
     if isSlaveDb():
         return mw.returnJson(False, 'slave','PG从库不能导入')
 
-    args = getArgs()
-    data = checkArgs(args, ['file', 'name'])
+    args = mw.getPluginArgs()
+    data = mw.checkPluginArgs(args, ['file', 'name'])
     if not data[0]:
         return data[1]
 
@@ -1376,7 +1370,7 @@ def importDbBackupProgress():
     name = args['name']
 
     cmd = 'cd ' + mw.getPanelDir() + ' && . bin/activate && '
-    cmd += 'python3 plugins/postgresql/index.py import_db_backup_progress_bar {"file":"' + file + '","name":"' + name + '"}'
+    cmd += 'python3 plugins/postgresql/index.py import_db_backup_progress_bar ' + mw.quote(json.dumps({'file': file, 'name': name}))
     return mw.returnJson(True, 'ok', cmd)
 
 
@@ -1384,8 +1378,8 @@ def importDbBackupProgressBar():
     if isSlaveDb():
         print("PG从库不能导入!")
         return
-    args = getArgs()
-    data = checkArgs(args, ['file', 'name'])
+    args = mw.getPluginArgs()
+    data = mw.checkPluginArgs(args, ['file', 'name'])
     if not data[0]:
         return data[1]
 
@@ -1399,7 +1393,7 @@ def importDbBackupProgressBar():
 
     file_path_sql = file_path.replace('.gz', '')
     if not os.path.exists(file_path_sql):
-        cmd = 'cd ' + bk_path_upload + ' && gzip -dk ' + file
+        cmd = 'cd ' + bk_path_upload + ' && gzip -dk ' + mw.quote(file)
         mw.execShell(cmd)
 
     port = getPgPort()
@@ -1408,7 +1402,7 @@ def importDbBackupProgressBar():
         psql = 'psql'
 
     # 统一用 _psqlBase, macOS 原分支连 -U postgres 都没带才会出现 "Password for user midoks:"
-    cmd = 'pv -t -p {} | {}'.format(file_path_sql, _psqlBase(psql, name, port))
+    cmd = 'pv -t -p {} | {}'.format(mw.quote(file_path_sql), _psqlBase(psql, name, port))
 
     print(cmd)
     os.system(cmd)
@@ -1418,8 +1412,8 @@ def importDbBackupProgressBar():
     return ''
 
 def deleteDbBackup():
-    args = getArgs()
-    data = checkArgs(args, ['filename'])
+    args = mw.getPluginArgs()
+    data = mw.checkPluginArgs(args, ['filename'])
     if not data[0]:
         return data[1]
 
@@ -1429,8 +1423,8 @@ def deleteDbBackup():
 
 
 def getDbBackupList():
-    args = getArgs()
-    data = checkArgs(args, ['name'])
+    args = mw.getPluginArgs()
+    data = mw.checkPluginArgs(args, ['name'])
     if not data[0]:
         return data[1]
 
@@ -1487,7 +1481,7 @@ def getDbBackupImportList():
     return mw.returnJson(True, 'ok', rdata)
 
 def getDbList():
-    args = getArgs()
+    args = mw.getPluginArgs()
     page = 1
     page_size = 10
     search = ''
@@ -1535,7 +1529,7 @@ def getDbList():
     return mw.getJson(data)
 
 def getTableList():
-    args = getArgs()
+    args = mw.getPluginArgs()
     db_name = ""
     if 'dbname' in args:
         db_name = args['dbname']
@@ -1594,8 +1588,8 @@ def addDb():
     if isSlaveDb():
         return mw.returnJson(False, '从库不能添加数据库!')
 
-    args = getArgs()
-    data = checkArgs(args, ['password', 'name', 'db_user', 'dataAccess'])
+    args = mw.getPluginArgs()
+    data = mw.checkPluginArgs(args, ['password', 'name', 'db_user', 'dataAccess'])
     if not data[0]:
         return data[1]
 
@@ -1665,8 +1659,8 @@ def addDb():
 
 
 def delDb():
-    args = getArgs()
-    data = checkArgs(args, ['id', 'name'])
+    args = mw.getPluginArgs()
+    data = mw.checkPluginArgs(args, ['id', 'name'])
     if not data[0]:
         return data[1]
 
@@ -1704,8 +1698,8 @@ def delDb():
 
 
 def setDbRw(version=''):
-    args = getArgs()
-    data = checkArgs(args, ['username', 'id', 'rw'])
+    args = mw.getPluginArgs()
+    data = mw.checkPluginArgs(args, ['username', 'id', 'rw'])
     if not data[0]:
         return data[1]
 
@@ -1736,8 +1730,8 @@ def setDbRw(version=''):
 
 
 def getDbAccess():
-    args = getArgs()
-    data = checkArgs(args, ['name'])
+    args = mw.getPluginArgs()
+    data = mw.checkPluginArgs(args, ['name'])
     if not data[0]:
         return data[1]
     name = args['name']
@@ -1752,8 +1746,8 @@ def getDbAccess():
 
 
 def setDbAccess():
-    args = getArgs()
-    data = checkArgs(args, ['name'])
+    args = mw.getPluginArgs()
+    data = mw.checkPluginArgs(args, ['name'])
     if not data[0]:
         return data[1]
 
@@ -1797,8 +1791,8 @@ def fixDbAccess(version):
 
 
 def getDbInfo():
-    args = getArgs()
-    data = checkArgs(args, ['name'])
+    args = mw.getPluginArgs()
+    data = mw.checkPluginArgs(args, ['name'])
     if not data[0]:
         return data[1]
 
@@ -1883,8 +1877,8 @@ def pgBack():
     import subprocess
     import shutil
 
-    args = getArgs()
-    data = checkArgs(args, ['name'])
+    args = mw.getPluginArgs()
+    data = mw.checkPluginArgs(args, ['name'])
     if not data[0]:
         return data[1]
 
@@ -1896,7 +1890,7 @@ def pgBack():
 
     # --- 读 postgres root 密码 ---
     pg_pwd = pSqliteDb('config').where('id=?', (1,)).getField('pg_root') or ''
-    safe_pwd = pg_pwd.replace("'", "'\\''")
+    safe_pwd = _pwdq(pg_pwd)
 
     # --- Unix socket ---
     socket_dir = '/tmp'
@@ -1948,10 +1942,10 @@ def pgBack():
 
     # --- 组装命令: bash -c 把整个管道包在同一个 bash 进程里 ---
     pg_dump_inner = '{} {} {} -U postgres -h {} -p {} 2>>{}'.format(
-        pg_dump, dump_opts, database, socket_dir, port, stderr_log)
+        pg_dump, dump_opts, _dq(database), _dq(socket_dir), _dq(port), _dq(stderr_log))
 
-    cmd = "bash -c \"set -o pipefail && PGPASSWORD='{}' {} | {} > \\\"{}\\\"; echo \\$? > {}\"".format(
-        safe_pwd, pg_dump_inner, compressor, file_path, exit_code_file)
+    cmd = "bash -c \"set -o pipefail && PGPASSWORD='{}' {} | {} > {}; echo \\$? > {}\"".format(
+        safe_pwd, pg_dump_inner, compressor, _dq(file_path), _dq(exit_code_file))
 
     rdata = mw.execShell(cmd)
 
@@ -2006,9 +2000,8 @@ def pgBack():
 
 
 def pgBackList():
-
-    args = getArgs()
-    data = checkArgs(args, ['name'])
+    args = mw.getPluginArgs()
+    data = mw.checkPluginArgs(args, ['name'])
     if not data[0]:
         return data[1]
 
@@ -2036,8 +2029,8 @@ def pgBackList():
 def importDbBackup():
     if isSlaveDb():
         return mw.returnJson(False, 'PG从库不能导入')
-    args = getArgs()
-    data = checkArgs(args, ['file', 'name'])
+    args = mw.getPluginArgs()
+    data = mw.checkPluginArgs(args, ['file', 'name'])
     if not data[0]:
         return data[1]
 
@@ -2056,7 +2049,7 @@ def importDbBackup():
         psql = 'psql'
 
     # 统一用 _psqlBase, 不再分 macOS/Linux
-    cmd = '''gunzip -c "{}" | {}'''.format(file_path, _psqlBase(psql, name, port))
+    cmd = '''gunzip -c {} | {}'''.format(mw.quote(file_path), _psqlBase(psql, name, port))
 
     # print(cmd)
 
@@ -2068,8 +2061,8 @@ def importDbBackup():
 
 
 def deleteDbBackup():
-    args = getArgs()
-    data = checkArgs(args, ['filename', 'path'])
+    args = mw.getPluginArgs()
+    data = mw.checkPluginArgs(args, ['filename', 'path'])
     if not data[0]:
         return data[1]
 
@@ -2161,8 +2154,8 @@ def getSlaveList(version=''):
 
 
 def getSlaveSSHByIp(version=''):
-    args = getArgs()
-    data = checkArgs(args, ['ip'])
+    args = mw.getPluginArgs()
+    data = mw.checkPluginArgs(args, ['ip'])
     if not data[0]:
         return data[1]
 
@@ -2174,8 +2167,8 @@ def getSlaveSSHByIp(version=''):
 
 
 def getSlaveSSHList(version=''):
-    args = getArgs()
-    data = checkArgs(args, ['page', 'page_size'])
+    args = mw.getPluginArgs()
+    data = mw.checkPluginArgs(args, ['page', 'page_size'])
     if not data[0]:
         return data[1]
 
@@ -2204,8 +2197,8 @@ def getSlaveSSHList(version=''):
 def addSlaveSSH(version=''):
     import base64
 
-    args = getArgs()
-    data = checkArgs(args, ['ip'])
+    args = mw.getPluginArgs()
+    data = mw.checkPluginArgs(args, ['ip'])
     if not data[0]:
         return data[1]
 
@@ -2213,7 +2206,7 @@ def addSlaveSSH(version=''):
     if ip == "":
         return mw.returnJson(True, 'ok')
 
-    data = checkArgs(args, ['port', 'id_rsa'])
+    data = mw.checkPluginArgs(args, ['port', 'id_rsa'])
     if not data[0]:
         return data[1]
 
@@ -2235,8 +2228,8 @@ def addSlaveSSH(version=''):
 
 
 def delSlaveSSH(version=''):
-    args = getArgs()
-    data = checkArgs(args, ['ip'])
+    args = mw.getPluginArgs()
+    data = mw.checkPluginArgs(args, ['ip'])
     if not data[0]:
         return data[1]
 
@@ -2248,8 +2241,8 @@ def delSlaveSSH(version=''):
 
 
 def updateSlaveSSH(version=''):
-    args = getArgs()
-    data = checkArgs(args, ['ip', 'id_rsa'])
+    args = mw.getPluginArgs()
+    data = mw.checkPluginArgs(args, ['ip', 'id_rsa'])
     if not data[0]:
         return data[1]
 
@@ -2260,8 +2253,8 @@ def updateSlaveSSH(version=''):
     return mw.returnJson(True, 'ok')
 
 def getSlaveSyncUserByIp(version=''):
-    args = getArgs()
-    data = checkArgs(args, ['ip'])
+    args = mw.getPluginArgs()
+    data = mw.checkPluginArgs(args, ['ip'])
     if not data[0]:
         return data[1]
 
@@ -2275,8 +2268,8 @@ def getSlaveSyncUserByIp(version=''):
 def addSlaveSyncUser(version=''):
     import base64
 
-    args = getArgs()
-    data = checkArgs(args, ['ip'])
+    args = mw.getPluginArgs()
+    data = mw.checkPluginArgs(args, ['ip'])
     if not data[0]:
         return data[1]
 
@@ -2284,7 +2277,7 @@ def addSlaveSyncUser(version=''):
     if ip == "":
         return mw.returnJson(True, 'ok')
 
-    data = checkArgs(args, ['port', 'user', 'pass', 'mode'])
+    data = mw.checkPluginArgs(args, ['port', 'user', 'pass', 'mode'])
     if not data[0]:
         return data[1]
 
@@ -2308,8 +2301,8 @@ def addSlaveSyncUser(version=''):
     return mw.returnJson(True, '设置成功!')
 
 def delSlaveSyncUser(version=''):
-    args = getArgs()
-    data = checkArgs(args, ['ip'])
+    args = mw.getPluginArgs()
+    data = mw.checkPluginArgs(args, ['ip'])
     if not data[0]:
         return data[1]
 
@@ -2320,8 +2313,8 @@ def delSlaveSyncUser(version=''):
     return mw.returnJson(True, '删除成功!')
 
 def getSlaveSyncUserList(version=''):
-    args = getArgs()
-    data = checkArgs(args, ['page', 'page_size'])
+    args = mw.getPluginArgs()
+    data = mw.checkPluginArgs(args, ['page', 'page_size'])
     if not data[0]:
         return data[1]
 
@@ -2358,8 +2351,8 @@ def getSlaveSyncMode(version):
 
 
 def setSlaveSyncMode(version):
-    args = getArgs()
-    data = checkArgs(args, ['mode'])
+    args = mw.getPluginArgs()
+    data = mw.checkPluginArgs(args, ['mode'])
     if not data[0]:
         return data[1]
     mode = args['mode']
@@ -2408,8 +2401,8 @@ def getSlaveLink(version):
     return mw.returnJson(True, 'ok', data)
 
 def getMasterRepSlaveList(version=''):
-    args = getArgs()
-    data = checkArgs(args, ['page', 'page_size'])
+    args = mw.getPluginArgs()
+    data = mw.checkPluginArgs(args, ['page', 'page_size'])
     if not data[0]:
         return data[1]
 
@@ -2435,8 +2428,8 @@ def getMasterRepSlaveList(version=''):
     return mw.getJson(data)
 
 def getMasterRepSlaveAccess(version=''):
-    args = getArgs()
-    data = checkArgs(args, ['name'])
+    args = mw.getPluginArgs()
+    data = mw.checkPluginArgs(args, ['name'])
     if not data[0]:
         return data[1]
     name = args['name'].strip()
@@ -2446,8 +2439,8 @@ def getMasterRepSlaveAccess(version=''):
     return mw.returnJson(True, accept)
 
 def setMasterRepSlaveAccess(version=''):
-    args = getArgs()
-    data = checkArgs(args, ['name'])
+    args = mw.getPluginArgs()
+    data = mw.checkPluginArgs(args, ['name'])
     if not data[0]:
         return data[1]
 
@@ -2467,8 +2460,8 @@ def setMasterRepSlaveAccess(version=''):
     return mw.returnJson(True, "设置成功")
 
 def addMasterRepSlaveUser(version=''):
-    args = getArgs()
-    data = checkArgs(args, ['username', 'password', 'address'])
+    args = mw.getPluginArgs()
+    data = mw.checkPluginArgs(args, ['username', 'password', 'address'])
     if not data[0]:
         return data[1]
 
@@ -2515,8 +2508,8 @@ def addMasterRepSlaveUser(version=''):
 
 
 def delMasterRepSlaveUser(version=''):
-    args = getArgs()
-    data = checkArgs(args, ['username'])
+    args = mw.getPluginArgs()
+    data = mw.checkPluginArgs(args, ['username'])
     if not data[0]:
         return data[1]
 
@@ -2540,8 +2533,8 @@ def delMasterRepSlaveUser(version=''):
     return mw.returnJson(True, '删除成功!')
 
 def getMasterRepSlaveUserCmd(version=''):
-    args = getArgs()
-    data = checkArgs(args, ['username', 'db'])
+    args = mw.getPluginArgs()
+    data = mw.checkPluginArgs(args, ['username', 'db'])
     if not data[0]:
         return data[1]
 
@@ -2559,17 +2552,17 @@ def getMasterRepSlaveUserCmd(version=''):
     if len(clist) == 0:
         return mw.returnJson(False, '请添加同步账户!')
 
-    cmd = 'PGPASSWORD=\'' + clist[0]['password'] + '\' ' + mdir + '/bin/pg_basebackup -Fp --progress -D ' + mdir + \
-        '/data -h ' + localIp + ' -p ' + port + \
-        ' -U ' + clist[0]['username'] + ' --password'
+    cmd = 'PGPASSWORD=' + mw.quote(clist[0]['password']) + ' ' + mdir + '/bin/pg_basebackup -Fp --progress -D ' + mdir + \
+        '/data -h ' + mw.quote(localIp) + ' -p ' + mw.quote(port) + \
+        ' -U ' + mw.quote(clist[0]['username']) + ' --password'
     data = {}
     data['cmd'] = cmd
     data['info'] = clist
     return mw.returnJson(True, 'ok!', data)
 
 def getMasterRepSlaveUserFullCmd(version=''):
-    args = getArgs()
-    data = checkArgs(args, ['username', 'db'])
+    args = mw.getPluginArgs()
+    data = mw.checkPluginArgs(args, ['username', 'db'])
     if not data[0]:
         return data[1]
 
@@ -2589,14 +2582,14 @@ def getMasterRepSlaveUserFullCmd(version=''):
         return mw.returnJson(False, '请添加同步账户!')
 
     sql = '<span class="set-info c7 ta_center">手动测试</span><hr style="margin-top: 5px;margin-bottom: 10px;"/>'
-    sql += 'PGPASSWORD=\'' + clist[0]['password'] + '\' ' + mdir + '/bin/pg_basebackup -Fp --progress -D ' + mdir + \
-        '/data -h ' + localIp + ' -p ' + port + \
-        ' -U ' + clist[0]['username'] + ' --password'
+    sql += 'PGPASSWORD=' + mw.quote(clist[0]['password']) + ' ' + mdir + '/bin/pg_basebackup -Fp --progress -D ' + mdir + \
+        '/data -h ' + mw.quote(localIp) + ' -p ' + mw.quote(port) + \
+        ' -U ' + mw.quote(clist[0]['username']) + ' --password'
     sql += "<hr/>"
     sql += '<span class="set-info c7 ta_center">同步账户模式</span><hr style="margin-top: 5px;margin-bottom: 10px;"/>'
-    sql +=  'PGPASSWORD=\'' + clist[0]['password'] + '\' ' + mdir + '/bin/pg_basebackup -D ' + mdir + '/data -h '\
-            + localIp + ' -p ' + port + ' -U ' + clist[0]['username'] + ' --password '\
-            + ' -S ' + clist[0]['username']
+    sql +=  'PGPASSWORD=' + mw.quote(clist[0]['password']) + ' ' + mdir + '/bin/pg_basebackup -D ' + mdir + '/data -h '\
+            + mw.quote(localIp) + ' -p ' + mw.quote(port) + ' -U ' + mw.quote(clist[0]['username']) + ' --password '\
+            + ' -S ' + mw.quote(clist[0]['username'])
 
     data = {}
     data['cmd'] = sql
@@ -2641,11 +2634,11 @@ def doFullSyncUser(version=''):
 
 
     cmd_sync = mdir + '/bin/pg_basebackup --progress -D ' + mdir + \
-        '/data -h ' + ip + ' -p ' + port \
+        '/data -h ' + _tclq(ip) + ' -p ' + _tclq(port) \
         + ' -Fp -Xs -P -R ' \
-        '-U ' + user + ' --password -S ' + slot_name
+        '-U ' + _tclq(user) + ' --password -S ' + _tclq(slot_name)
 
-    cmd_sync_pwd = "PGPASSWORD='"+apass+"' " + cmd_sync
+    cmd_sync_pwd = "PGPASSWORD=" + mw.quote(apass) + " " + cmd_sync
     print(cmd_sync_pwd)
 
 
@@ -2655,7 +2648,7 @@ spawn %s
 expect "Password:"
 send "%s\r"
 interact
-""" % (cmd_sync, apass)
+""" % (cmd_sync, _tclEscape(apass))
 
     mw.writeFile(cmd_tmp, cmd_tmp_data)
 
@@ -2778,9 +2771,9 @@ def doFullSyncSSH(version=''):
     port = getPgPort()
 
     cmd = mdir + '/bin/pg_basebackup --progress -D ' + mdir + \
-        '/data -h ' + ip + ' -p ' + port\
+        '/data -h ' + _tclq(ip) + ' -p ' + _tclq(port)\
         + ' -Fp -Xs -P -R ' \
-        '-U ' + username + ' --password'
+        '-U ' + _tclq(username) + ' --password'
     print(cmd)
 
     cmd_tmp = "/tmp/cmd_run.sh"
@@ -2790,7 +2783,7 @@ spawn %s
 expect "Password:"
 send "%s\r"
 interact
-""" % (cmd, password)
+""" % (cmd, _tclEscape(password))
 
     mw.writeFile(cmd_tmp, cmd_tmp_data)
     # 停用
@@ -2840,8 +2833,14 @@ interact
 
     writeDbSyncStatus({'code': 6, 'msg': '从库重启完成...', 'progress': 100})
     if os.path.exists(SSH_PRIVATE_KEY):
-        os.system("rm -rf " + SSH_PRIVATE_KEY)
-    os.system("rm -rf " + cmd_tmp)
+        try:
+            os.remove(SSH_PRIVATE_KEY)
+        except OSError:
+            pass
+    try:
+        os.remove(cmd_tmp)
+    except OSError:
+        pass
     return True
 
 
